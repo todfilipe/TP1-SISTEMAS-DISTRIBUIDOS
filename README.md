@@ -52,35 +52,38 @@ Comunicação via **sockets TCP**, protocolo **textual linha-a-linha**.
 ## Estrutura do Repositório
 
 ```
-TP1_OneHealth/
-├── Sensor/
-│   ├── Program.cs           # Entry point — recebe IP do Gateway como argumento
-│   ├── Sensor.cs            # Lógica de comunicação TCP
-│   └── SensorCLI.cs         # Interface de texto com o utilizador
+TP1/
+├── README.md
 │
-├── Gateway/
-│   ├── Program.cs
-│   ├── Gateway.cs           # Servidor para Sensores + cliente para Servidor
-│   ├── SensorRegistry.cs    # Leitura/escrita do ficheiro CSV de sensores
-│   └── HeartbeatMonitor.cs  # Monitorização de timeouts de heartbeat
+├── docs/                         # Documentação do projeto
+│   ├── Protocolo_TP1_2526.pdf    # Enunciado original
+│   ├── TP1_Roadmap.pdf           # Roadmap do grupo com fases e checklists
+│   ├── Relatorio_TP1_Protocolo.docx # Relatório do protocolo
+│   └── TP1_Guia.md               # Guia de contexto para uso com IA
 │
-├── Servidor/
+├── Sensor/                       # Código do Sensor (Fase 2)
+│   ├── Program.cs                # Entry point — recebe IP do Gateway como argumento
+│   ├── Sensor.cs                 # Lógica de comunicação TCP
+│   └── SensorCLI.cs              # Interface de texto com o utilizador
+│
+├── Gateway/                      # Código do Gateway (Fase 2)
 │   ├── Program.cs
-│   ├── Servidor.cs          # Servidor TCP para Gateways (threads + locks)
-│   └── DataStore.cs         # Armazenamento em ficheiros por tipo de dado
+│   ├── Gateway.cs                # Servidor para Sensores + cliente para Servidor
+│   ├── SensorRegistry.cs         # Leitura/escrita do ficheiro CSV de sensores
+│   └── HeartbeatMonitor.cs       # Monitorização de timeouts de heartbeat
+│
+├── Servidor/                     # Código do Servidor (Fase 2)
+│   ├── Program.cs
+│   ├── Servidor.cs               # Servidor TCP para Gateways (threads + locks)
+│   └── DataStore.cs              # Armazenamento em ficheiros por tipo de dado
 │
 ├── config/
-│   └── sensors.csv          # Configuração dos sensores do Gateway
+│   └── sensors.csv               # Configuração dos sensores do Gateway
 │
-├── data/                    # Ficheiros de output do Servidor (gerados em runtime)
-│   ├── TEMP.csv
-│   ├── HUM.csv
-│   └── ...
-│
-├── Protocolo_TP1_2526.pdf   # Enunciado original
-├── TP1_Roadmap.docx         # Roadmap do grupo com fases e checklists
-├── TP1_Guia_IA.md           # Guia de contexto para uso com IA
-└── README.md
+└── data/                         # Ficheiros de output do Servidor (gerados em runtime)
+    ├── TEMP.csv
+    ├── HUM.csv
+    └── ...
 ```
 
 ---
@@ -168,6 +171,7 @@ CREATE TABLE Medicoes (
 
 ## Documentação Adicional
 
-- [`TP1_Roadmap.docx`](./TP1_Roadmap.docx) — Roadmap detalhado com tarefas, checklists e calendário
-- [`TP1_Guia_IA.md`](./TP1_Guia_IA.md) — Contexto e prompts prontos para uso com IA durante o desenvolvimento
-- [`Protocolo_TP1_2526.pdf`](./Protocolo_TP1_2526.pdf) — Enunciado oficial do trabalho
+- [`docs/TP1_Roadmap.pdf`](./docs/TP1_Roadmap.pdf) — Roadmap detalhado com tarefas, checklists e calendário
+- [`docs/TP1_Guia.md`](./docs/TP1_Guia.md) — Contexto e prompts prontos para uso com IA durante o desenvolvimento
+- [`docs/Protocolo_TP1_2526.pdf`](./docs/Protocolo_TP1_2526.pdf) — Enunciado oficial do trabalho
+- [`docs/Relatorio_TP1_Protocolo.docx`](./docs/Relatorio_TP1_Protocolo.docx) — Relatório do protocolo de comunicação
