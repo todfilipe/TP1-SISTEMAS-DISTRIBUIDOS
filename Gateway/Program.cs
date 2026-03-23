@@ -7,6 +7,14 @@ using System.Threading;
 
 namespace Gateway
 {
+    // Estados possíveis de um sensor durante a sessão (conforme sd_rel.pdf secção 3.1)
+    enum SensorState
+    {
+        AGUARDA_CONNECT,
+        AGUARDA_REGISTER_TYPES,
+        OPERACIONAL
+    }
+
     class Program
     {
         static string gatewayId;
@@ -15,27 +23,30 @@ namespace Gateway
         static StreamWriter serverWriter;
         static bool isRunning = true;
 
-        // Objeto de sincronização para garantir exclusão mútua na escrita para o Servidor
+        // Objeto de sincronização para garantir exclusão mútua na comunicação com o Servidor
         static readonly object serverLock = new object();
 
         static void Main(string[] args)
         {
-            // Validação do parâmetro de arranque (ID do Gateway)
+            // Validação dos parâmetros de arranque
             if (args.Length < 1)
             {
-                Console.WriteLine("Uso: Gateway <gateway_id>");
+                Console.WriteLine("Uso: Gateway <gateway_id> [server_ip] [server_port]");
                 return;
             }
 
             gatewayId = args[0];
+            string serverIp = args.Length >= 2 ? args[1] : "127.0.0.1";
+            int serverPort = args.Length >= 3 && int.TryParse(args[2], out int p) ? p : 9090;
+
             Console.WriteLine($"[GATEWAY] A iniciar com ID: {gatewayId}");
 
-            // 1. Ligar ao Servidor (IP: 127.0.0.1, Porta: 9090)
+            // 1. Ligar ao Servidor
             try
             {
-                serverClient = new TcpClient("127.0.0.1", 9090);
+                serverClient = new TcpClient(serverIp, serverPort);
                 var stream = serverClient.GetStream();
-                
+
                 // Inicializar leitores/escritores (UTF-8) com AutoFlush no StreamWriter
                 serverReader = new StreamReader(stream, Encoding.UTF8);
                 serverWriter = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true };
@@ -44,9 +55,9 @@ namespace Gateway
                 serverWriter.WriteLine($"GW_CONNECT {gatewayId}");
                 Console.WriteLine($"[GATEWAY] Pedido de ligação enviado ao Servidor (GW_CONNECT {gatewayId}).");
 
-                // Aguardar a reposta de confirmação
+                // Aguardar a resposta de confirmação (formato: OK_GW_CONNECTED <gw_id>)
                 string response = serverReader.ReadLine();
-                if (response != "OK_GW_CONNECTED")
+                if (response == null || !response.StartsWith("OK_GW_CONNECTED"))
                 {
                     Console.WriteLine($"[ERRO] Falha ao ligar ao Servidor. Resposta obtida: {response}");
                     return;
@@ -56,7 +67,7 @@ namespace Gateway
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[ERRO] Não foi possível ligar ao Servidor (127.0.0.1:9090): {ex.Message}");
+                Console.WriteLine($"[ERRO] Não foi possível ligar ao Servidor ({serverIp}:{serverPort}): {ex.Message}");
                 return;
             }
 
@@ -67,7 +78,7 @@ namespace Gateway
                 Console.WriteLine("\n[GATEWAY] A encerrar Gateway...");
                 e.Cancel = true; // Impede terminação imediata
                 isRunning = false;
-                
+
                 lock (serverLock)
                 {
                     try
@@ -97,8 +108,8 @@ namespace Gateway
                         // Aceita um sensor e cria uma Thread para o seu atendimento
                         TcpClient sensorClient = sensorListener.AcceptTcpClient();
                         Thread sensorThread = new Thread(() => HandleSensor(sensorClient));
-                        // Marcar como background de facto evita impedir fechar o processo se a thread ficar presa
-                        sensorThread.IsBackground = true; 
+                        // Marcar como background para não impedir o encerramento do processo
+                        sensorThread.IsBackground = true;
                         sensorThread.Start();
                     }
                     else
@@ -120,11 +131,34 @@ namespace Gateway
         }
 
         /// <summary>
+        /// Envia uma mensagem ao Servidor e lê a resposta, tudo dentro do lock.
+        /// Retorna a resposta do Servidor, ou null em caso de erro.
+        /// </summary>
+        static string SendToServer(string message)
+        {
+            lock (serverLock)
+            {
+                try
+                {
+                    serverWriter.WriteLine(message);
+                    string response = serverReader.ReadLine();
+                    return response;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[ERRO] Falha na comunicação com o Servidor: {ex.Message}");
+                    return null;
+                }
+            }
+        }
+
+        /// <summary>
         /// Trata a comunicação com um Sensor de forma independente (numa thread separada).
         /// </summary>
         static void HandleSensor(TcpClient sensorClient)
         {
-            string currentSensorId = "UNKNOWN"; // Variável local à thread para armazenar o ID do sensor atual
+            string currentSensorId = "UNKNOWN";
+            SensorState state = SensorState.AGUARDA_CONNECT;
 
             try
             {
@@ -147,70 +181,113 @@ namespace Gateway
                         {
                             case "CONNECT":
                                 // CONNECT <sensor_id>
-                                if (parts.Length >= 2)
+                                if (parts.Length < 2)
                                 {
-                                    currentSensorId = parts[1];
-                                    Console.WriteLine($"[SENSOR '{currentSensorId}'] conectou-se.");
-                                    
-                                    // Responder sucesso
-                                    writer.WriteLine($"OK_CONNECTED {currentSensorId}");
+                                    writer.WriteLine("ERR_INVALID_DATA");
+                                    break;
                                 }
+
+                                if (state != SensorState.AGUARDA_CONNECT)
+                                {
+                                    writer.WriteLine("ERR_SEQUENCE");
+                                    break;
+                                }
+
+                                currentSensorId = parts[1];
+                                state = SensorState.AGUARDA_REGISTER_TYPES;
+                                Console.WriteLine($"[SENSOR '{currentSensorId}'] conectou-se.");
+                                writer.WriteLine($"OK_CONNECTED {currentSensorId}");
                                 break;
 
                             case "REGISTER_TYPES":
                                 // REGISTER_TYPES <t1,t2,...>
-                                Console.WriteLine($"[SENSOR '{currentSensorId}'] solicitou registo de tipos.");
-                                
-                                // O enunciado diz apenas para responder OK nesta fase
+                                if (parts.Length < 2)
+                                {
+                                    writer.WriteLine("ERR_INVALID_DATA");
+                                    break;
+                                }
+
+                                if (state != SensorState.AGUARDA_REGISTER_TYPES)
+                                {
+                                    writer.WriteLine("ERR_SEQUENCE");
+                                    break;
+                                }
+
+                                state = SensorState.OPERACIONAL;
+                                Console.WriteLine($"[SENSOR '{currentSensorId}'] registou tipos: {parts[1]}");
                                 writer.WriteLine("OK_TYPES_REGISTERED");
                                 break;
 
                             case "DATA":
                                 // DATA <tipo> <valor> <zona> <timestamp>
-                                if (parts.Length >= 5)
+                                if (parts.Length < 5)
                                 {
-                                    string tipo = parts[1];
-                                    string valor = parts[2];
-                                    string zona = parts[3];
-                                    string timestamp = parts[4];
-                                    
-                                    Console.WriteLine($"[SENSOR '{currentSensorId}'] enviou DATA: {tipo}={valor} na zona {zona}");
+                                    writer.WriteLine("ERR_INVALID_DATA");
+                                    break;
+                                }
 
-                                    // Encaminhar para o servidor usando FORWARD via Escritor global
-                                    // Utilizamos Lock pois MÚLTIPLAS THREADS (sensores) podem tentar escrever no socket do Servidor em simultâneo
-                                    lock (serverLock)
-                                    {
-                                        try
-                                        {
-                                            serverWriter.WriteLine($"FORWARD {currentSensorId} {tipo} {valor} {zona} {timestamp}");
-                                        }
-                                        catch (Exception ex)
-                                        {
-                                            Console.WriteLine($"[ERRO] Falha ao enviar FORWARD ao Servidor: {ex.Message}");
-                                        }
-                                    }
+                                if (state != SensorState.OPERACIONAL)
+                                {
+                                    writer.WriteLine("ERR_SEQUENCE");
+                                    break;
+                                }
 
-                                    // Responder OK de recebimento ao sensor
+                                string tipo = parts[1];
+                                string valor = parts[2];
+                                string zona = parts[3];
+                                string timestamp = parts[4];
+
+                                Console.WriteLine($"[SENSOR '{currentSensorId}'] enviou DATA: {tipo}={valor} na zona {zona}");
+
+                                // Encaminhar para o servidor usando FORWARD e ler a resposta
+                                string serverResponse = SendToServer($"FORWARD {currentSensorId} {tipo} {valor} {zona} {timestamp}");
+
+                                if (serverResponse != null && serverResponse.StartsWith("OK"))
+                                {
                                     writer.WriteLine("OK");
                                 }
+                                else
+                                {
+                                    Console.WriteLine($"[ERRO] Servidor respondeu: {serverResponse}");
+                                    writer.WriteLine("ERR_INVALID_DATA");
+                                }
+                                break;
+
+                            case "HEARTBEAT":
+                                // HEARTBEAT <sensor_id> — stub para Fase 3
+                                if (state != SensorState.OPERACIONAL)
+                                {
+                                    writer.WriteLine("ERR_SEQUENCE");
+                                    break;
+                                }
+                                Console.WriteLine($"[SENSOR '{currentSensorId}'] heartbeat recebido.");
+                                writer.WriteLine("OK");
                                 break;
 
                             case "DISCONNECT":
                                 // DISCONNECT <sensor_id>
-                                if (parts.Length >= 2)
+                                if (parts.Length < 2)
                                 {
-                                    string disconnectId = parts[1];
-                                    Console.WriteLine($"[SENSOR '{disconnectId}'] solicitou desconexão.");
-                                    
-                                    writer.WriteLine("OK_DISCONNECT");
-                                    
-                                    // Sai da função e permite fechar as streams limpidamente (graceful exit)
-                                    return;
+                                    writer.WriteLine("ERR_INVALID_DATA");
+                                    break;
                                 }
-                                break;
+
+                                string disconnectId = parts[1];
+                                Console.WriteLine($"[SENSOR '{disconnectId}'] solicitou desconexão.");
+                                writer.WriteLine("OK_DISCONNECT");
+
+                                // Notificar o Servidor da mudança de estado (sd_rel.pdf secção 6.4)
+                                string statusResponse = SendToServer($"SENSOR_STATUS {disconnectId} desligado");
+                                if (statusResponse != null)
+                                {
+                                    Console.WriteLine($"[GATEWAY] SENSOR_STATUS enviado ao Servidor para '{disconnectId}'. Resposta: {statusResponse}");
+                                }
+
+                                return;
 
                             default:
                                 Console.WriteLine($"[AVISO] Comando desconhecido de {currentSensorId}: {line}");
+                                writer.WriteLine("ERR_INVALID_DATA");
                                 break;
                         }
                     }
@@ -218,7 +295,6 @@ namespace Gateway
             }
             catch (Exception ex)
             {
-                // Como pode acontecer quando forçado desconectar
                 Console.WriteLine($"[ERRO SENSOR '{currentSensorId}'] A conexão caiu de forma inesperada: {ex.Message}");
             }
             finally
