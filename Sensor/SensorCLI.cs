@@ -99,34 +99,47 @@ public class SensorCLI
             Console.WriteLine();
             string cmd = PedirInput("Comando").Trim().ToUpper();
 
-            switch (cmd)
+            try
             {
-                case "DATA":
-                    CmdData(tiposRegistados);
-                    break;
+                switch (cmd)
+                {
+                    case "DATA":
+                        CmdData(tiposRegistados);
+                        break;
 
-                case "HEARTBEAT":
-                    CmdHeartbeat();
-                    break;
+                    case "HEARTBEAT":
+                        CmdHeartbeat();
+                        break;
 
-                case "DISCONNECT":
-                    CmdDisconnect();
-                    return;
+                    case "DISCONNECT":
+                        CmdDisconnect();
+                        return;
 
-                case "AJUDA":
-                case "HELP":
-                    MostrarAjuda(tiposRegistados);
-                    break;
+                    case "AJUDA":
+                    case "HELP":
+                        MostrarAjuda(tiposRegistados);
+                        break;
 
-                case "SAIR":
-                case "EXIT":
-                    // Desconectar antes de sair
-                    CmdDisconnect();
-                    return;
+                    case "SAIR":
+                    case "EXIT":
+                        // Desconectar antes de sair
+                        CmdDisconnect();
+                        return;
 
-                default:
-                    Console.WriteLine("Comando desconhecido. Escreva AJUDA para ver os comandos.");
-                    break;
+                    default:
+                        Console.WriteLine("Comando desconhecido. Escreva AJUDA para ver os comandos.");
+                        break;
+                }
+            }
+            catch (IOException)
+            {
+                Console.WriteLine("[ERRO] Ligação com o Gateway perdida.");
+                return;
+            }
+            catch (TimeoutException)
+            {
+                Console.WriteLine("[ERRO] Timeout na comunicação com o Gateway.");
+                return;
             }
         }
     }
@@ -170,8 +183,8 @@ public class SensorCLI
             return;
         }
 
-        // Timestamp automático
-        string timestamp = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss");
+        // Timestamp automático em UTC (consistente com o protocolo ISO 8601)
+        string timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss");
 
         Console.WriteLine($"A enviar DATA {tipo} {valor} {zona} {timestamp}...");
         string resp = _sensor!.SendData(tipo, valor, zona, timestamp);

@@ -19,6 +19,9 @@ public class SensorClient : IDisposable
     private bool _connected;
     private bool _typesRegistered;
 
+    // Timeout para ligação e leitura (10s conforme protocolo)
+    private const int TimeoutMs = 10000;
+
     public string SensorId => _sensorId;
     public bool IsConnected => _connected;
     public bool IsTypesRegistered => _typesRegistered;
@@ -32,16 +35,30 @@ public class SensorClient : IDisposable
     }
 
     /// <summary>
-    /// Estabelece a ligação TCP com o Gateway.
+    /// Estabelece a ligação TCP com o Gateway (com timeout).
     /// </summary>
     public void ConnectTcp()
     {
         _client = new TcpClient();
-        _client.Connect(_gatewayHost, _gatewayPort);
+
+        // Timeout de ligação para não bloquear indefinidamente
+        var connectTask = _client.ConnectAsync(_gatewayHost, _gatewayPort);
+        if (!connectTask.Wait(TimeoutMs))
+        {
+            _client.Close();
+            throw new TimeoutException($"Timeout ao ligar ao Gateway {_gatewayHost}:{_gatewayPort} ({TimeoutMs}ms).");
+        }
+
+        // Timeout de leitura no socket
+        _client.ReceiveTimeout = TimeoutMs;
 
         var stream = _client.GetStream();
         _reader = new StreamReader(stream, System.Text.Encoding.UTF8);
-        _writer = new StreamWriter(stream, System.Text.Encoding.UTF8) { AutoFlush = true };
+        _writer = new StreamWriter(stream, System.Text.Encoding.UTF8)
+        {
+            AutoFlush = true,
+            NewLine = "\n" // Protocolo define \n como terminador (não \r\n)
+        };
     }
 
     /// <summary>
@@ -52,7 +69,8 @@ public class SensorClient : IDisposable
         SendMessage($"CONNECT {_sensorId}");
         string response = ReadResponse();
 
-        if (response.StartsWith("OK_CONNECTED"))
+        // Verificar resposta: OK_CONNECTED <sensor_id>
+        if (response == $"OK_CONNECTED {_sensorId}")
             _connected = true;
 
         return response;
@@ -78,13 +96,14 @@ public class SensorClient : IDisposable
 
     /// <summary>
     /// Envia DATA com uma medição ambiental.
+    /// Timestamp em UTC para consistência com o protocolo ISO 8601.
     /// </summary>
     public string SendData(string tipo, string valor, string zona, string? timestamp = null)
     {
         if (!IsOperational)
             return "ERR: Deve completar CONNECT e REGISTER_TYPES primeiro.";
 
-        timestamp ??= DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss");
+        timestamp ??= DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss");
         SendMessage($"DATA {tipo} {valor} {zona} {timestamp}");
         return ReadResponse();
     }
@@ -140,11 +159,25 @@ public class SensorClient : IDisposable
 
     public void Dispose()
     {
+        // Tentar desconexão ordenada se ainda estiver conectado
+        if (_connected && _writer != null)
+        {
+            try
+            {
+                SendMessage($"DISCONNECT {_sensorId}");
+                _reader?.ReadLine(); // Ler OK_DISCONNECT (best-effort)
+            }
+            catch
+            {
+                // Ignorar erros durante cleanup — a ligação pode já estar fechada
+            }
+        }
+
+        _connected = false;
+        _typesRegistered = false;
         _writer?.Dispose();
         _reader?.Dispose();
         _client?.Close();
         _client?.Dispose();
-        _connected = false;
-        _typesRegistered = false;
     }
 }
