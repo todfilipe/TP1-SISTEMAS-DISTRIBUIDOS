@@ -5,6 +5,17 @@ using System.IO;
 namespace Servidor
 {
     /// <summary>
+    /// Resultado de uma operação de armazenamento.
+    /// Permite distinguir entre sucesso, dados inválidos e falha de storage.
+    /// </summary>
+    public enum ResultadoArmazenamento
+    {
+        Sucesso,
+        DadosInvalidos,
+        ErroStorage
+    }
+
+    /// <summary>
     /// Armazena medições ambientais em ficheiros CSV separados por tipo de dado.
     /// Cada tipo de dado (TEMP, HUM, PM2.5, etc.) tem o seu próprio ficheiro.
     /// Thread-safe: usa locks por ficheiro para proteger escritas concorrentes.
@@ -30,9 +41,14 @@ namespace Servidor
             "ZONA_RESIDENCIAL", "ZONA_PARQUE"
         };
 
-        public DataStore(string dataDirectory = "../data")
+        public DataStore(string? dataDirectory = null)
         {
-            _dataDirectory = dataDirectory;
+            // Usar caminho relativo ao executável em vez de depender do working directory
+            _dataDirectory = dataDirectory
+                ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "..", "data");
+
+            // Normalizar o caminho para resolver os ".."
+            _dataDirectory = Path.GetFullPath(_dataDirectory);
 
             // Criar diretório de dados se não existir
             if (!Directory.Exists(_dataDirectory))
@@ -61,21 +77,21 @@ namespace Servidor
         /// Armazena uma medição ambiental no ficheiro CSV correspondente ao tipo de dado.
         /// Formato da linha: sensor_id,zona,valor,timestamp
         /// </summary>
-        /// <returns>true se armazenado com sucesso, false se houve erro.</returns>
-        public bool ArmazenarMedicao(string sensorId, string tipoDado, string valor, string zona, string timestamp)
+        /// <returns>ResultadoArmazenamento indicando sucesso, dados inválidos ou erro de storage.</returns>
+        public ResultadoArmazenamento ArmazenarMedicao(string sensorId, string tipoDado, string valor, string zona, string timestamp)
         {
             // Validar tipo de dado
             if (!TiposValidos.Contains(tipoDado))
             {
                 Console.WriteLine($"[DataStore] Tipo de dado inválido: {tipoDado}");
-                return false;
+                return ResultadoArmazenamento.DadosInvalidos;
             }
 
             // Validar zona
             if (!ZonasValidas.Contains(zona))
             {
                 Console.WriteLine($"[DataStore] Zona inválida: {zona}");
-                return false;
+                return ResultadoArmazenamento.DadosInvalidos;
             }
 
             // Validar valor numérico
@@ -83,28 +99,29 @@ namespace Servidor
                 System.Globalization.CultureInfo.InvariantCulture, out double valorNumerico))
             {
                 Console.WriteLine($"[DataStore] Valor numérico inválido: {valor}");
-                return false;
+                return ResultadoArmazenamento.DadosInvalidos;
             }
 
             // Valores negativos só são aceites para TEMP
             if (valorNumerico < 0 && tipoDado != "TEMP")
             {
                 Console.WriteLine($"[DataStore] Valor negativo rejeitado para {tipoDado}: {valor}");
-                return false;
+                return ResultadoArmazenamento.DadosInvalidos;
             }
 
             // Validar timestamp ISO 8601
-            if (!DateTime.TryParse(timestamp, out DateTime ts))
+            if (!DateTime.TryParse(timestamp, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None, out DateTime ts))
             {
                 Console.WriteLine($"[DataStore] Timestamp inválido: {timestamp}");
-                return false;
+                return ResultadoArmazenamento.DadosInvalidos;
             }
 
-            // Rejeitar timestamps com mais de 60s no futuro
-            if (ts > DateTime.Now.AddSeconds(60))
+            // Rejeitar timestamps com mais de 60s no futuro (usar UtcNow para consistência)
+            if (ts > DateTime.UtcNow.AddSeconds(60))
             {
                 Console.WriteLine($"[DataStore] Timestamp demasiado no futuro: {timestamp}");
-                return false;
+                return ResultadoArmazenamento.DadosInvalidos;
             }
 
             // Construir linha CSV
@@ -126,12 +143,12 @@ namespace Servidor
                 }
 
                 Console.WriteLine($"[DataStore] Medição armazenada: {tipoDado} <- {linha}");
-                return true;
+                return ResultadoArmazenamento.Sucesso;
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[DataStore] ERRO ao escrever ficheiro {filePath}: {ex.Message}");
-                return false;
+                return ResultadoArmazenamento.ErroStorage;
             }
         }
 
@@ -143,7 +160,7 @@ namespace Servidor
             Console.WriteLine($"[DataStore] Estado do sensor atualizado: {sensorId} -> {estado}");
 
             string filePath = Path.Combine(_dataDirectory, "sensor_status.csv");
-            string linha = $"{sensorId},{estado},{DateTime.Now:yyyy-MM-ddTHH:mm:ss}";
+            string linha = $"{sensorId},{estado},{DateTime.UtcNow:yyyy-MM-ddTHH:mm:ss}";
 
             object fileLock = GetLockForType("sensor_status");
             try

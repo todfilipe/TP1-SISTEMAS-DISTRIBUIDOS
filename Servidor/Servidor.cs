@@ -18,11 +18,17 @@ namespace Servidor
         private readonly int _porta;
         private readonly DataStore _dataStore;
         private TcpListener? _listener;
-        private bool _running;
+        private volatile bool _running;
 
-        // Lista de gateways ligados (para referência/log)
-        private readonly List<string> _gatewaysLigados = new();
+        // Conjunto de gateways ligados (HashSet para lookups eficientes)
+        private readonly HashSet<string> _gatewaysLigados = new();
         private readonly object _gwListLock = new();
+
+        // Estados válidos para SENSOR_STATUS (estático para evitar recriação)
+        private static readonly HashSet<string> EstadosValidos = new()
+        {
+            "ativo", "manutencao", "desativado", "indisponivel", "desligado"
+        };
 
         public ServidorTCP(int porta = 9090)
         {
@@ -73,10 +79,10 @@ namespace Servidor
                     }
                 }
             }
-            catch (SocketException ex) when (!_running)
+            catch (SocketException) when (!_running)
             {
                 // Servidor encerrado normalmente
-                Console.WriteLine($"[Servidor] Encerrado.");
+                Console.WriteLine("[Servidor] Encerrado.");
             }
             catch (Exception ex)
             {
@@ -114,6 +120,7 @@ namespace Servidor
         {
             string gatewayId = "?";
             string endpoint = client.Client.RemoteEndPoint?.ToString() ?? "desconhecido";
+            bool gwConnected = false; // Controlo de sequência: GW_CONNECT deve ser o primeiro comando
 
             try
             {
@@ -134,7 +141,7 @@ namespace Servidor
 
                     Console.WriteLine($"[<- {gatewayId}] {linha}");
 
-                    string resposta = ProcessarMensagem(linha, ref gatewayId);
+                    string resposta = ProcessarMensagem(linha, ref gatewayId, ref gwConnected);
 
                     writer.WriteLine(resposta);
                     Console.WriteLine($"[-> {gatewayId}] {resposta}");
@@ -169,8 +176,9 @@ namespace Servidor
 
         /// <summary>
         /// Processa uma mensagem recebida de um Gateway e devolve a resposta apropriada.
+        /// Verifica controlo de sequência: GW_CONNECT deve ser o primeiro comando.
         /// </summary>
-        private string ProcessarMensagem(string mensagem, ref string gatewayId)
+        private string ProcessarMensagem(string mensagem, ref string gatewayId, ref bool gwConnected)
         {
             string[] partes = mensagem.Split(' ', StringSplitOptions.RemoveEmptyEntries);
 
@@ -179,10 +187,17 @@ namespace Servidor
 
             string comando = partes[0];
 
+            // Controlo de sequência: apenas GW_CONNECT é aceite antes da autenticação
+            if (!gwConnected && comando != "GW_CONNECT")
+            {
+                Console.WriteLine($"[Servidor] Comando '{comando}' recebido antes de GW_CONNECT — rejeitado.");
+                return "ERR_SEQUENCE";
+            }
+
             switch (comando)
             {
                 case "GW_CONNECT":
-                    return ProcessarGwConnect(partes, ref gatewayId);
+                    return ProcessarGwConnect(partes, ref gatewayId, ref gwConnected);
 
                 case "FORWARD":
                     return ProcessarForward(partes, gatewayId);
@@ -203,7 +218,7 @@ namespace Servidor
         /// Processa GW_CONNECT <gateway_id>
         /// Regista o gateway e responde OK_GW_CONNECTED <gw_id>
         /// </summary>
-        private string ProcessarGwConnect(string[] partes, ref string gatewayId)
+        private string ProcessarGwConnect(string[] partes, ref string gatewayId, ref bool gwConnected)
         {
             // Validar formato: GW_CONNECT <gateway_id>
             if (partes.Length != 2)
@@ -221,15 +236,18 @@ namespace Servidor
                 return "ERR_INVALID_DATA";
             }
 
-            gatewayId = gwId;
-
+            // Verificar se este gateway já está conectado noutra sessão
             lock (_gwListLock)
             {
-                if (!_gatewaysLigados.Contains(gwId))
+                if (_gatewaysLigados.Contains(gwId))
                 {
-                    _gatewaysLigados.Add(gwId);
+                    Console.WriteLine($"[Servidor] AVISO: Gateway {gwId} já está conectado. A substituir sessão anterior.");
                 }
+                _gatewaysLigados.Add(gwId);
             }
+
+            gatewayId = gwId;
+            gwConnected = true;
 
             Console.WriteLine($"[Servidor] Gateway conectado: {gwId}");
             return $"OK_GW_CONNECTED {gwId}";
@@ -238,6 +256,7 @@ namespace Servidor
         /// <summary>
         /// Processa FORWARD <sensor_id> <tipo> <valor> <zona> <timestamp>
         /// Valida os dados e armazena via DataStore.
+        /// Distingue entre ERR_INVALID_DATA e ERR_STORAGE_FULL.
         /// </summary>
         private string ProcessarForward(string[] partes, string gatewayId)
         {
@@ -261,18 +280,17 @@ namespace Servidor
                 return "ERR_INVALID_DATA";
             }
 
-            // Tentar armazenar (DataStore faz as validações de tipo, zona, valor, timestamp)
-            bool sucesso = _dataStore.ArmazenarMedicao(sensorId, tipoDado, valor, zona, timestamp);
+            // Armazenar via DataStore (retorna enum com tipo de resultado)
+            ResultadoArmazenamento resultado = _dataStore.ArmazenarMedicao(sensorId, tipoDado, valor, zona, timestamp);
 
-            if (sucesso)
+            switch (resultado)
             {
-                return "OK";
-            }
-            else
-            {
-                // Verificar se é erro de storage ou dados inválidos
-                // Nesta fase básica, tratamos tudo como ERR_INVALID_DATA
-                return "ERR_INVALID_DATA";
+                case ResultadoArmazenamento.Sucesso:
+                    return "OK";
+                case ResultadoArmazenamento.ErroStorage:
+                    return "ERR_STORAGE_FULL";
+                default:
+                    return "ERR_INVALID_DATA";
             }
         }
 
@@ -293,12 +311,7 @@ namespace Servidor
             string estado = partes[2];
 
             // Validar estados possíveis
-            HashSet<string> estadosValidos = new()
-            {
-                "ativo", "manutencao", "desativado", "indisponivel", "desligado"
-            };
-
-            if (!estadosValidos.Contains(estado))
+            if (!EstadosValidos.Contains(estado))
             {
                 Console.WriteLine($"[Servidor] SENSOR_STATUS: estado inválido '{estado}'.");
                 return "ERR_INVALID_DATA";
@@ -313,7 +326,7 @@ namespace Servidor
 
         /// <summary>
         /// Processa GW_DISCONNECT <gateway_id>
-        /// Confirma a desconexão do gateway.
+        /// Valida que o ID corresponde ao gateway conectado e confirma a desconexão.
         /// </summary>
         private string ProcessarGwDisconnect(string[] partes, string gatewayId)
         {
@@ -325,6 +338,13 @@ namespace Servidor
             }
 
             string gwId = partes[1];
+
+            // Validar que o gateway_id corresponde ao que fez GW_CONNECT
+            if (gwId != gatewayId)
+            {
+                Console.WriteLine($"[Servidor] GW_DISCONNECT: ID '{gwId}' não corresponde ao gateway conectado '{gatewayId}'.");
+                return "ERR_INVALID_DATA";
+            }
 
             lock (_gwListLock)
             {
