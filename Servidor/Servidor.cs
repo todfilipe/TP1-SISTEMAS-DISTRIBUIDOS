@@ -262,17 +262,16 @@ namespace Servidor
             }
 
             // Tentar armazenar (DataStore faz as validações de tipo, zona, valor, timestamp)
-            bool sucesso = _dataStore.ArmazenarMedicao(sensorId, tipoDado, valor, zona, timestamp);
+            string? erro = _dataStore.ArmazenarMedicao(sensorId, tipoDado, valor, zona, timestamp);
 
-            if (sucesso)
+            if (erro == null)
             {
                 return "OK";
             }
             else
             {
-                // Verificar se é erro de storage ou dados inválidos
-                // Nesta fase básica, tratamos tudo como ERR_INVALID_DATA
-                return "ERR_INVALID_DATA";
+                // Retornar o código de erro específico (ERR_INVALID_DATA ou ERR_STORAGE_FULL)
+                return erro;
             }
         }
 

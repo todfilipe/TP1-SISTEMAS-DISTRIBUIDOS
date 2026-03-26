@@ -30,9 +30,21 @@ namespace Servidor
             "ZONA_RESIDENCIAL", "ZONA_PARQUE"
         };
 
-        public DataStore(string dataDirectory = "../data")
+        public DataStore(string? dataDirectory = null)
         {
-            _dataDirectory = dataDirectory;
+            if (dataDirectory != null)
+            {
+                _dataDirectory = dataDirectory;
+            }
+            else
+            {
+                // Calcular caminho relativo à raiz do projeto (pasta que contém Servidor/)
+                // AppContext.BaseDirectory aponta para bin/Debug/net8.0/
+                // Subimos 4 níveis: net8.0 -> Debug -> bin -> Servidor -> raiz
+                string baseDir = AppContext.BaseDirectory;
+                string projectRoot = Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", ".."));
+                _dataDirectory = Path.Combine(projectRoot, "data");
+            }
 
             // Criar diretório de dados se não existir
             if (!Directory.Exists(_dataDirectory))
@@ -40,6 +52,8 @@ namespace Servidor
                 Directory.CreateDirectory(_dataDirectory);
                 Console.WriteLine($"[DataStore] Diretório de dados criado: {_dataDirectory}");
             }
+
+            Console.WriteLine($"[DataStore] Diretório de dados: {Path.GetFullPath(_dataDirectory)}");
         }
 
         /// <summary>
@@ -61,21 +75,21 @@ namespace Servidor
         /// Armazena uma medição ambiental no ficheiro CSV correspondente ao tipo de dado.
         /// Formato da linha: sensor_id,zona,valor,timestamp
         /// </summary>
-        /// <returns>true se armazenado com sucesso, false se houve erro.</returns>
-        public bool ArmazenarMedicao(string sensorId, string tipoDado, string valor, string zona, string timestamp)
+        /// <returns>null se armazenado com sucesso, ou código de erro (ERR_INVALID_DATA, ERR_STORAGE_FULL).</returns>
+        public string? ArmazenarMedicao(string sensorId, string tipoDado, string valor, string zona, string timestamp)
         {
             // Validar tipo de dado
             if (!TiposValidos.Contains(tipoDado))
             {
                 Console.WriteLine($"[DataStore] Tipo de dado inválido: {tipoDado}");
-                return false;
+                return "ERR_INVALID_DATA";
             }
 
             // Validar zona
             if (!ZonasValidas.Contains(zona))
             {
                 Console.WriteLine($"[DataStore] Zona inválida: {zona}");
-                return false;
+                return "ERR_INVALID_DATA";
             }
 
             // Validar valor numérico
@@ -83,28 +97,28 @@ namespace Servidor
                 System.Globalization.CultureInfo.InvariantCulture, out double valorNumerico))
             {
                 Console.WriteLine($"[DataStore] Valor numérico inválido: {valor}");
-                return false;
+                return "ERR_INVALID_DATA";
             }
 
             // Valores negativos só são aceites para TEMP
             if (valorNumerico < 0 && tipoDado != "TEMP")
             {
                 Console.WriteLine($"[DataStore] Valor negativo rejeitado para {tipoDado}: {valor}");
-                return false;
+                return "ERR_INVALID_DATA";
             }
 
             // Validar timestamp ISO 8601
             if (!DateTime.TryParse(timestamp, out DateTime ts))
             {
                 Console.WriteLine($"[DataStore] Timestamp inválido: {timestamp}");
-                return false;
+                return "ERR_INVALID_DATA";
             }
 
             // Rejeitar timestamps com mais de 60s no futuro
             if (ts > DateTime.Now.AddSeconds(60))
             {
                 Console.WriteLine($"[DataStore] Timestamp demasiado no futuro: {timestamp}");
-                return false;
+                return "ERR_INVALID_DATA";
             }
 
             // Construir linha CSV
@@ -126,12 +140,17 @@ namespace Servidor
                 }
 
                 Console.WriteLine($"[DataStore] Medição armazenada: {tipoDado} <- {linha}");
-                return true;
+                return null; // Sucesso
+            }
+            catch (IOException ex)
+            {
+                Console.WriteLine($"[DataStore] ERRO I/O ao escrever ficheiro {filePath}: {ex.Message}");
+                return "ERR_STORAGE_FULL";
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[DataStore] ERRO ao escrever ficheiro {filePath}: {ex.Message}");
-                return false;
+                return "ERR_STORAGE_FULL";
             }
         }
 
