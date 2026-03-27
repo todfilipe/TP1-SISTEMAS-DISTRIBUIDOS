@@ -248,38 +248,35 @@ namespace Gateway
                                 break;
 
                             case "DATA":
-                                // DATA <tipo> <valor> <zona> <timestamp>
-                                if (parts.Length < 5)
-                                {
-                                    writer.WriteLine("ERR_INVALID_DATA");
-                                    break;
-                                }
-
+                                // ── Verificação de sequência do protocolo ──
+                                // O sensor só pode enviar DATA depois de CONNECT + REGISTER_TYPES
                                 if (state != SensorState.OPERACIONAL)
                                 {
                                     writer.WriteLine("ERR_SEQUENCE");
                                     break;
                                 }
 
-                                string tipo = parts[1];
-                                string valor = parts[2];
-                                string zona = parts[3];
-                                string timestamp = parts[4];
+                                Console.WriteLine($"[SENSOR '{currentSensorId}'] recebeu mensagem DATA: {line}");
 
-                                Console.WriteLine($"[SENSOR '{currentSensorId}'] enviou DATA: {tipo}={valor} na zona {zona}");
+                                // ── Validação completa (Fase 3) ──
+                                // Delega toda a lógica de validação ao DataValidator,
+                                // que segue a ordem estrita: Registo → Estado → Tipo → Conteúdo → Sucesso
+                                DataValidationResult validationResult =
+                                    DataValidator.ValidateAndProcessData(line, currentSensorId, configManager);
 
-                                // Atualizar o last_sync do sensor na configuração CSV
-                                if (configManager != null)
+                                // Registar o resultado da validação na consola
+                                Console.WriteLine(validationResult.LogMessage);
+
+                                if (!validationResult.IsValid)
                                 {
-                                    DateTime syncTime;
-                                    if (DateTime.TryParse(timestamp, CultureInfo.InvariantCulture, DateTimeStyles.None, out syncTime))
-                                    {
-                                        configManager.UpdateLastSync(currentSensorId, syncTime);
-                                    }
+                                    // Enviar o código de erro específico ao sensor
+                                    writer.WriteLine(validationResult.ErrorCode);
+                                    break;
                                 }
 
-                                // Encaminhar para o servidor usando FORWARD e ler a resposta
-                                string serverResponse = SendToServer($"FORWARD {currentSensorId} {tipo} {valor} {zona} {timestamp}");
+                                // ── Encaminhar para o Servidor ──
+                                // A mensagem FORWARD já foi construída pelo validador
+                                string serverResponse = SendToServer(validationResult.ForwardMessage);
 
                                 if (serverResponse != null && serverResponse.StartsWith("OK"))
                                 {
@@ -288,7 +285,7 @@ namespace Gateway
                                 else
                                 {
                                     Console.WriteLine($"[ERRO] Servidor respondeu: {serverResponse}");
-                                    writer.WriteLine("ERR_INVALID_DATA");
+                                    writer.WriteLine("ERR_SERVER");
                                 }
                                 break;
 
