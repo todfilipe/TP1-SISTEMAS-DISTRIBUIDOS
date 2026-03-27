@@ -46,13 +46,16 @@ namespace Gateway
             "ZONA_ESCOLAR",
             "ZONA_INDUSTRIAL",
             "ZONA_RESIDENCIAL",
-            "ZONA_PARQUE"
+            "ZONA_PARQUE",
+            "ZONA_NORTE",
+            "ZONA_SUL",
+            "ZONA_ESTE"
         };
 
         /// <summary>Tipos de dados globais reconhecidos pelo sistema.</summary>
         private static readonly HashSet<string> TiposGlobais = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "TEMP", "HUM", "AR", "RUIDO", "PM2.5", "PM10", "LUZ", "VIDEO"
+            "TEMP", "HUM", "AR", "RUIDO", "PM2.5", "PM10", "LUZ", "VIDEO", "CO2"
         };
 
         /// <summary>Tolerância máxima para timestamps no futuro (em segundos).</summary>

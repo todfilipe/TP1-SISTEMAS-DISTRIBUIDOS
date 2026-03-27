@@ -290,7 +290,7 @@ namespace Gateway
                                 break;
 
                             case "HEARTBEAT":
-                                // HEARTBEAT <sensor_id> — stub para Fase 3
+                                // HEARTBEAT <sensor_id> — Fase 3: atualiza last_sync
                                 if (state != SensorState.OPERACIONAL)
                                 {
                                     writer.WriteLine("ERR_SEQUENCE");
@@ -298,6 +298,7 @@ namespace Gateway
                                 }
                                 Console.WriteLine($"[SENSOR '{currentSensorId}'] heartbeat recebido.");
                                 writer.WriteLine("OK");
+                                configManager?.UpdateLastSync(currentSensorId, DateTime.UtcNow);
                                 break;
 
                             case "DISCONNECT":
