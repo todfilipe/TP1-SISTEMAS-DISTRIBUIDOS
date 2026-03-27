@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -22,6 +23,9 @@ namespace Gateway
         static StreamReader serverReader;
         static StreamWriter serverWriter;
         static bool isRunning = true;
+
+        // Gestor da configuração dos sensores (ficheiro sensors.csv)
+        static SensorConfigManager configManager;
 
         // Objeto de sincronização para garantir exclusão mútua na comunicação com o Servidor
         static readonly object serverLock = new object();
@@ -68,6 +72,12 @@ namespace Gateway
                 }
 
                 Console.WriteLine("[GATEWAY] Ligado com sucesso ao Servidor (recebido OK_GW_CONNECTED).");
+
+                // 1.1 Carregar a configuração dos sensores a partir do ficheiro CSV
+                string csvPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "sensors.csv");
+                configManager = new SensorConfigManager(csvPath);
+                int loaded = configManager.LoadConfig();
+                Console.WriteLine($"[GATEWAY] Configuração de sensores carregada ({loaded} sensor(es)).");
             }
             catch (Exception ex)
             {
@@ -235,6 +245,25 @@ namespace Gateway
                                 }
 
                                 currentSensorId = parts[1];
+
+                                // Validar o sensor contra a configuração CSV
+                                SensorConfig sensorCfg = configManager?.GetSensor(currentSensorId);
+                                if (sensorCfg != null)
+                                {
+                                    // Verificar se o sensor está num estado que permite conexão
+                                    if (sensorCfg.Estado == "desativado" || sensorCfg.Estado == "manutencao")
+                                    {
+                                        Console.WriteLine($"[SENSOR '{currentSensorId}'] rejeitado — estado actual: {sensorCfg.Estado}.");
+                                        writer.WriteLine($"ERR_SENSOR_STATE {sensorCfg.Estado}");
+                                        return;
+                                    }
+                                    Console.WriteLine($"[CONFIG] Sensor '{currentSensorId}' validado (zona: {sensorCfg.Zona}, estado: {sensorCfg.Estado}).");
+                                }
+                                else
+                                {
+                                    Console.WriteLine($"[CONFIG] AVISO: Sensor '{currentSensorId}' não existe no CSV — a aceitar sem validação.");
+                                }
+
                                 state = SensorState.AGUARDA_REGISTER_TYPES;
                                 Console.WriteLine($"[SENSOR '{currentSensorId}'] conectou-se.");
                                 writer.WriteLine($"OK_CONNECTED {currentSensorId}");
@@ -260,28 +289,35 @@ namespace Gateway
                                 break;
 
                             case "DATA":
-                                // DATA <tipo> <valor> <zona> <timestamp>
-                                if (parts.Length < 5)
-                                {
-                                    writer.WriteLine("ERR_INVALID_DATA");
-                                    break;
-                                }
-
+                                // ── Verificação de sequência do protocolo ──
+                                // O sensor só pode enviar DATA depois de CONNECT + REGISTER_TYPES
                                 if (state != SensorState.OPERACIONAL)
                                 {
                                     writer.WriteLine("ERR_SEQUENCE");
                                     break;
                                 }
 
-                                string tipo = parts[1];
-                                string valor = parts[2];
-                                string zona = parts[3];
-                                string timestamp = parts[4];
+                                Console.WriteLine($"[SENSOR '{currentSensorId}'] recebeu mensagem DATA: {line}");
 
-                                Console.WriteLine($"[SENSOR '{currentSensorId}'] enviou DATA: {tipo}={valor} na zona {zona}");
+                                // ── Validação completa (Fase 3) ──
+                                // Delega toda a lógica de validação ao DataValidator,
+                                // que segue a ordem estrita: Registo → Estado → Tipo → Conteúdo → Sucesso
+                                DataValidationResult validationResult =
+                                    DataValidator.ValidateAndProcessData(line, currentSensorId, configManager);
 
-                                // Encaminhar para o servidor usando FORWARD e ler a resposta
-                                string serverResponse = SendToServer($"FORWARD {currentSensorId} {tipo} {valor} {zona} {timestamp}");
+                                // Registar o resultado da validação na consola
+                                Console.WriteLine(validationResult.LogMessage);
+
+                                if (!validationResult.IsValid)
+                                {
+                                    // Enviar o código de erro específico ao sensor
+                                    writer.WriteLine(validationResult.ErrorCode);
+                                    break;
+                                }
+
+                                // ── Encaminhar para o Servidor ──
+                                // A mensagem FORWARD já foi construída pelo validador
+                                string serverResponse = SendToServer(validationResult.ForwardMessage);
 
                                 if (serverResponse != null && serverResponse.StartsWith("OK"))
                                 {
@@ -290,12 +326,12 @@ namespace Gateway
                                 else
                                 {
                                     Console.WriteLine($"[ERRO] Servidor respondeu: {serverResponse}");
-                                    writer.WriteLine("ERR_INVALID_DATA");
+                                    writer.WriteLine("ERR_SERVER");
                                 }
                                 break;
 
                             case "HEARTBEAT":
-                                // HEARTBEAT <sensor_id> — stub para Fase 3
+                                // HEARTBEAT <sensor_id> — Fase 3: atualiza last_sync
                                 if (state != SensorState.OPERACIONAL)
                                 {
                                     writer.WriteLine("ERR_SEQUENCE");
@@ -303,6 +339,7 @@ namespace Gateway
                                 }
                                 Console.WriteLine($"[SENSOR '{currentSensorId}'] heartbeat recebido.");
                                 writer.WriteLine("OK");
+                                configManager?.UpdateLastSync(currentSensorId, DateTime.UtcNow);
                                 break;
 
                             case "DISCONNECT":
@@ -316,6 +353,9 @@ namespace Gateway
                                 string disconnectId = parts[1];
                                 Console.WriteLine($"[SENSOR '{disconnectId}'] solicitou desconexão.");
                                 writer.WriteLine("OK_DISCONNECT");
+
+                                // Atualizar o estado do sensor na configuração CSV para 'desligado'
+                                configManager?.ChangeSensorStatus(disconnectId, "desligado");
 
                                 // Notificar o Servidor da mudança de estado (sd_rel.pdf secção 6.4)
                                 string statusResponse = SendToServer($"SENSOR_STATUS {disconnectId} desligado");
