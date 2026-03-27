@@ -26,6 +26,9 @@ namespace Gateway
         // Objeto de sincronização para garantir exclusão mútua na comunicação com o Servidor
         static readonly object serverLock = new object();
 
+        // Lock para acesso thread-safe ao ficheiro de metadados de vídeo
+        static readonly object videoLogLock = new object();
+
         static void Main(string[] args)
         {
             // Validação dos parâmetros de arranque
@@ -92,7 +95,44 @@ namespace Gateway
                 Environment.Exit(0);
             };
 
-            // 3. Abrir Listener para os Sensores na porta 8080
+            // 3. Abrir Listener para streams de vídeo na porta 8081 (thread separada)
+            Thread videoThread = new Thread(() =>
+            {
+                TcpListener videoListener = null;
+                try
+                {
+                    videoListener = new TcpListener(IPAddress.Any, 8081);
+                    videoListener.Start();
+                    Console.WriteLine("[GATEWAY] A escutar streams de vídeo na porta 8081...");
+
+                    while (isRunning)
+                    {
+                        if (videoListener.Pending())
+                        {
+                            TcpClient videoClient = videoListener.AcceptTcpClient();
+                            Thread handler = new Thread(() => HandleVideoStream(videoClient));
+                            handler.IsBackground = true;
+                            handler.Start();
+                        }
+                        else
+                        {
+                            Thread.Sleep(100);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[ERRO] Falha no listener de vídeo: {ex.Message}");
+                }
+                finally
+                {
+                    videoListener?.Stop();
+                }
+            });
+            videoThread.IsBackground = true;
+            videoThread.Start();
+
+            // 4. Abrir Listener para os Sensores na porta 8080
             TcpListener sensorListener = null;
             try
             {
@@ -301,6 +341,94 @@ namespace Gateway
             {
                 sensorClient.Close();
                 Console.WriteLine($"[GATEWAY] Atendimento ao SENSOR '{currentSensorId}' finalizado.");
+            }
+        }
+    
+        /// <summary>
+        /// Trata uma stream de vídeo enviada por um Sensor na porta 8081.
+        /// Recebe frames, regista metadados no ficheiro video_metadata.log.
+        /// </summary>
+        static void HandleVideoStream(TcpClient client)
+        {
+            string sensorId = "UNKNOWN";
+
+            try
+            {
+                using (var stream = client.GetStream())
+                using (var reader = new StreamReader(stream, Encoding.UTF8))
+                using (var writer = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true })
+                {
+                    // Ler primeira linha: VIDEO_STREAM <sensor_id>
+                    string firstLine = reader.ReadLine();
+                    if (firstLine == null)
+                        return;
+
+                    string[] parts = firstLine.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length < 2 || parts[0] != "VIDEO_STREAM")
+                    {
+                        // Formato inválido — fechar sem responder
+                        return;
+                    }
+
+                    sensorId = parts[1];
+                    Console.WriteLine($"[VIDEO] Stream iniciada pelo sensor '{sensorId}'.");
+
+                    // Responder com OK
+                    writer.WriteLine("OK_VIDEO_STARTED");
+
+                    // Registar instante de início
+                    DateTime startTime = DateTime.UtcNow;
+                    int frameCount = 0;
+
+                    // Ler frames até STREAM_END ou ligação fechar
+                    string line;
+                    while ((line = reader.ReadLine()) != null)
+                    {
+                        string[] lineParts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                        if (lineParts.Length == 0)
+                            continue;
+
+                        if (lineParts[0] == "FRAME")
+                        {
+                            frameCount++;
+                            Console.WriteLine($"[VIDEO] Sensor '{sensorId}' — frame {(lineParts.Length >= 3 ? lineParts[2] : frameCount.ToString())} recebido.");
+                        }
+                        else if (lineParts[0] == "STREAM_END")
+                        {
+                            Console.WriteLine($"[VIDEO] Stream do sensor '{sensorId}' terminada ({frameCount} frames recebidos).");
+                            break;
+                        }
+                    }
+
+                    // Calcular duração e guardar metadados
+                    TimeSpan duracao = DateTime.UtcNow - startTime;
+
+                    lock (videoLogLock)
+                    {
+                        string logFile = "video_metadata.log";
+                        bool escreverCabecalho = !File.Exists(logFile) || new FileInfo(logFile).Length == 0;
+
+                        using (var logWriter = new StreamWriter(logFile, append: true, Encoding.UTF8))
+                        {
+                            if (escreverCabecalho)
+                            {
+                                logWriter.WriteLine("sensor_id,inicio_utc,duracao_segundos");
+                            }
+
+                            logWriter.WriteLine($"{sensorId},{startTime:yyyy-MM-ddTHH:mm:ss},{duracao.TotalSeconds:F2}");
+                        }
+                    }
+
+                    Console.WriteLine($"[VIDEO] Metadados do sensor '{sensorId}' registados em video_metadata.log.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ERRO VIDEO '{sensorId}'] {ex.Message}");
+            }
+            finally
+            {
+                client.Close();
             }
         }
     }
