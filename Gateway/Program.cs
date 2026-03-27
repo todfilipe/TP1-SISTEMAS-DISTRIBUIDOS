@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -22,6 +23,9 @@ namespace Gateway
         static StreamReader serverReader;
         static StreamWriter serverWriter;
         static bool isRunning = true;
+
+        // Gestor da configuração dos sensores (ficheiro sensors.csv)
+        static SensorConfigManager configManager;
 
         // Objeto de sincronização para garantir exclusão mútua na comunicação com o Servidor
         static readonly object serverLock = new object();
@@ -64,6 +68,12 @@ namespace Gateway
                 }
 
                 Console.WriteLine("[GATEWAY] Ligado com sucesso ao Servidor (recebido OK_GW_CONNECTED).");
+
+                // 1.1 Carregar a configuração dos sensores a partir do ficheiro CSV
+                string csvPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "sensors.csv");
+                configManager = new SensorConfigManager(csvPath);
+                int loaded = configManager.LoadConfig();
+                Console.WriteLine($"[GATEWAY] Configuração de sensores carregada ({loaded} sensor(es)).");
             }
             catch (Exception ex)
             {
@@ -194,6 +204,25 @@ namespace Gateway
                                 }
 
                                 currentSensorId = parts[1];
+
+                                // Validar o sensor contra a configuração CSV
+                                SensorConfig sensorCfg = configManager?.GetSensor(currentSensorId);
+                                if (sensorCfg != null)
+                                {
+                                    // Verificar se o sensor está num estado que permite conexão
+                                    if (sensorCfg.Estado == "desativado" || sensorCfg.Estado == "manutencao")
+                                    {
+                                        Console.WriteLine($"[SENSOR '{currentSensorId}'] rejeitado — estado actual: {sensorCfg.Estado}.");
+                                        writer.WriteLine($"ERR_SENSOR_STATE {sensorCfg.Estado}");
+                                        return;
+                                    }
+                                    Console.WriteLine($"[CONFIG] Sensor '{currentSensorId}' validado (zona: {sensorCfg.Zona}, estado: {sensorCfg.Estado}).");
+                                }
+                                else
+                                {
+                                    Console.WriteLine($"[CONFIG] AVISO: Sensor '{currentSensorId}' não existe no CSV — a aceitar sem validação.");
+                                }
+
                                 state = SensorState.AGUARDA_REGISTER_TYPES;
                                 Console.WriteLine($"[SENSOR '{currentSensorId}'] conectou-se.");
                                 writer.WriteLine($"OK_CONNECTED {currentSensorId}");
@@ -239,6 +268,16 @@ namespace Gateway
 
                                 Console.WriteLine($"[SENSOR '{currentSensorId}'] enviou DATA: {tipo}={valor} na zona {zona}");
 
+                                // Atualizar o last_sync do sensor na configuração CSV
+                                if (configManager != null)
+                                {
+                                    DateTime syncTime;
+                                    if (DateTime.TryParse(timestamp, CultureInfo.InvariantCulture, DateTimeStyles.None, out syncTime))
+                                    {
+                                        configManager.UpdateLastSync(currentSensorId, syncTime);
+                                    }
+                                }
+
                                 // Encaminhar para o servidor usando FORWARD e ler a resposta
                                 string serverResponse = SendToServer($"FORWARD {currentSensorId} {tipo} {valor} {zona} {timestamp}");
 
@@ -275,6 +314,9 @@ namespace Gateway
                                 string disconnectId = parts[1];
                                 Console.WriteLine($"[SENSOR '{disconnectId}'] solicitou desconexão.");
                                 writer.WriteLine("OK_DISCONNECT");
+
+                                // Atualizar o estado do sensor na configuração CSV para 'desligado'
+                                configManager?.ChangeSensorStatus(disconnectId, "desligado");
 
                                 // Notificar o Servidor da mudança de estado (sd_rel.pdf secção 6.4)
                                 string statusResponse = SendToServer($"SENSOR_STATUS {disconnectId} desligado");
