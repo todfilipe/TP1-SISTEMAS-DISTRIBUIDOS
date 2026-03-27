@@ -46,16 +46,13 @@ namespace Gateway
             "ZONA_ESCOLAR",
             "ZONA_INDUSTRIAL",
             "ZONA_RESIDENCIAL",
-            "ZONA_PARQUE",
-            "ZONA_NORTE",
-            "ZONA_SUL",
-            "ZONA_ESTE"
+            "ZONA_PARQUE"
         };
 
         /// <summary>Tipos de dados globais reconhecidos pelo sistema.</summary>
         private static readonly HashSet<string> TiposGlobais = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "TEMP", "HUM", "AR", "RUIDO", "PM2.5", "PM10", "LUZ", "VIDEO", "CO2"
+            "TEMP", "HUM", "AR", "RUIDO", "PM2.5", "PM10", "LUZ", "VIDEO"
         };
 
         /// <summary>Tolerância máxima para timestamps no futuro (em segundos).</summary>
@@ -115,32 +112,20 @@ namespace Gateway
             }
 
             // ═══════════════════════════════════════════════════════
-            //  PASSO 4a — Validação de Formato (antes de extrair campos)
-            //  A mensagem deve ter exatamente 5 blocos: DATA <tipo> <valor> <zona> <timestamp>
+            //  Extração antecipada do tipo para PASSO 3
+            //  Split seguro: precisamos de pelo menos 2 blocos para extrair o tipo
             // ═══════════════════════════════════════════════════════
 
             string[] parts = rawMessage.Split(' ', StringSplitOptions.RemoveEmptyEntries);
 
-            if (parts.Length != 5)
-            {
-                return new DataValidationResult
-                {
-                    IsValid = false,
-                    ErrorCode = "ERR_INVALID_DATA",
-                    LogMessage = $"[VALIDAÇÃO] Mensagem com formato inválido — esperados 5 blocos, recebidos {parts.Length}."
-                };
-            }
-
-            // Extrair os 4 parâmetros da mensagem
-            string tipoDado  = parts[1];           // ex: TEMP
-            string valorStr  = parts[2];           // ex: 22.5
-            string zona      = parts[3];           // ex: ZONA_CENTRO
-            string tsStr     = parts[4];           // ex: 2026-03-10T09:15:00
-
             // ═══════════════════════════════════════════════════════
             //  PASSO 3 — Validação de Tipo de Dado
-            //  O tipo recebido tem de pertencer à lista autorizada DESTE sensor no CSV
+            //  O tipo recebido tem de pertencer à lista autorizada DESTE sensor no CSV.
+            //  Fazemos este passo antes da validação de formato completo (5 blocos),
+            //  respeitando a ordem estrita do protocolo: Registo→Estado→Tipo→Conteúdo.
             // ═══════════════════════════════════════════════════════
+
+            string tipoDado = parts.Length >= 2 ? parts[1] : "";
 
             bool tipoAutorizado = false;
             foreach (string t in sensor.TiposDados)
@@ -162,6 +147,26 @@ namespace Gateway
                                  $"Tipos permitidos: [{string.Join(",", sensor.TiposDados)}]."
                 };
             }
+
+            // ═══════════════════════════════════════════════════════
+            //  PASSO 4a — Validação de Formato
+            //  A mensagem deve ter exatamente 5 blocos: DATA <tipo> <valor> <zona> <timestamp>
+            // ═══════════════════════════════════════════════════════
+
+            if (parts.Length != 5)
+            {
+                return new DataValidationResult
+                {
+                    IsValid = false,
+                    ErrorCode = "ERR_INVALID_DATA",
+                    LogMessage = $"[VALIDAÇÃO] Mensagem com formato inválido — esperados 5 blocos, recebidos {parts.Length}."
+                };
+            }
+
+            // Extrair os restantes parâmetros da mensagem
+            string valorStr  = parts[2];  // ex: 22.5
+            string zona      = parts[3];  // ex: ZONA_CENTRO
+            string tsStr     = parts[4];  // ex: 2026-03-10T09:15:00
 
             // ═══════════════════════════════════════════════════════
             //  PASSO 4b — Validação de Tipo Definido Global
@@ -230,7 +235,9 @@ namespace Gateway
             // ═══════════════════════════════════════════════════════
 
             DateTime tsDateTime;
-            if (!DateTime.TryParse(tsStr, CultureInfo.InvariantCulture, DateTimeStyles.None, out tsDateTime))
+            if (!DateTime.TryParse(tsStr, CultureInfo.InvariantCulture,
+                                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                                    out tsDateTime))
             {
                 return new DataValidationResult
                 {

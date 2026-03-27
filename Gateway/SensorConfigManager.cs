@@ -170,7 +170,9 @@ namespace Gateway
 
             // Tentar fazer o parse do timestamp ISO 8601
             DateTime lastSync;
-            if (!DateTime.TryParse(timestampStr, CultureInfo.InvariantCulture, DateTimeStyles.None, out lastSync))
+            if (!DateTime.TryParse(timestampStr, CultureInfo.InvariantCulture,
+                                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                                    out lastSync))
             {
                 Console.WriteLine($"[CONFIG] AVISO: Linha {lineNumber} — timestamp inválido '{timestampStr}': {line}");
                 return null;

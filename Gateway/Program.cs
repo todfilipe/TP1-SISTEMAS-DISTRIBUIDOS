@@ -27,6 +27,9 @@ namespace Gateway
         // Gestor da configuração dos sensores (ficheiro sensors.csv)
         static SensorConfigManager configManager;
 
+        // Monitor de heartbeats dos sensores (deteta timeouts)
+        static HeartbeatGateway heartbeatMonitor;
+
         // Objeto de sincronização para garantir exclusão mútua na comunicação com o Servidor
         static readonly object serverLock = new object();
 
@@ -78,6 +81,10 @@ namespace Gateway
                 configManager = new SensorConfigManager(csvPath);
                 int loaded = configManager.LoadConfig();
                 Console.WriteLine($"[GATEWAY] Configuração de sensores carregada ({loaded} sensor(es)).");
+
+                // 1.2 Iniciar o monitor de heartbeats (deteta sensores com timeout)
+                heartbeatMonitor = new HeartbeatGateway(configManager, SendToServer);
+                heartbeatMonitor.Start();
             }
             catch (Exception ex)
             {
@@ -92,6 +99,7 @@ namespace Gateway
                 Console.WriteLine("\n[GATEWAY] A encerrar Gateway...");
                 e.Cancel = true; // Impede terminação imediata
                 isRunning = false;
+                heartbeatMonitor?.Stop();
 
                 lock (serverLock)
                 {
@@ -254,14 +262,16 @@ namespace Gateway
                                     if (sensorCfg.Estado == "desativado" || sensorCfg.Estado == "manutencao")
                                     {
                                         Console.WriteLine($"[SENSOR '{currentSensorId}'] rejeitado — estado actual: {sensorCfg.Estado}.");
-                                        writer.WriteLine($"ERR_SENSOR_STATE {sensorCfg.Estado}");
+                                        writer.WriteLine("ERR_SENSOR_INACTIVE");
                                         return;
                                     }
                                     Console.WriteLine($"[CONFIG] Sensor '{currentSensorId}' validado (zona: {sensorCfg.Zona}, estado: {sensorCfg.Estado}).");
                                 }
                                 else
                                 {
-                                    Console.WriteLine($"[CONFIG] AVISO: Sensor '{currentSensorId}' não existe no CSV — a aceitar sem validação.");
+                                    Console.WriteLine($"[CONFIG] Sensor '{currentSensorId}' não existe no CSV — ligação rejeitada (ERR_NOT_REGISTERED).");
+                                    writer.WriteLine("ERR_NOT_REGISTERED");
+                                    return;
                                 }
 
                                 state = SensorState.AGUARDA_REGISTER_TYPES;
