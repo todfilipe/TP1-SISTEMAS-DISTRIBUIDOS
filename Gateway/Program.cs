@@ -41,6 +41,7 @@ namespace Gateway
             gatewayId = args[0];
             string serverIp = args.Length >= 2 ? args[1] : "127.0.0.1";
             int serverPort = args.Length >= 3 && int.TryParse(args[2], out int p) ? p : 9090;
+            int videoPort = args.Length >= 4 && int.TryParse(args[3], out int vp) ? vp : 8081;
 
             Console.WriteLine($"[GATEWAY] A iniciar com ID: {gatewayId}");
 
@@ -101,9 +102,9 @@ namespace Gateway
                 TcpListener videoListener = null;
                 try
                 {
-                    videoListener = new TcpListener(IPAddress.Any, 8081);
+                    videoListener = new TcpListener(IPAddress.Any, videoPort);
                     videoListener.Start();
-                    Console.WriteLine("[GATEWAY] A escutar streams de vídeo na porta 8081...");
+                    Console.WriteLine($"[GATEWAY] A escutar streams de vídeo na porta {videoPort}...");
 
                     while (isRunning)
                     {
@@ -351,6 +352,8 @@ namespace Gateway
         static void HandleVideoStream(TcpClient client)
         {
             string sensorId = "UNKNOWN";
+            DateTime startTime = DateTime.UtcNow;
+            int frameCount = 0;
 
             try
             {
@@ -373,12 +376,11 @@ namespace Gateway
                     sensorId = parts[1];
                     Console.WriteLine($"[VIDEO] Stream iniciada pelo sensor '{sensorId}'.");
 
-                    // Responder com OK
-                    writer.WriteLine("OK_VIDEO_STARTED");
+                    // Responder com OK (confirmação no canal de vídeo)
+                    writer.WriteLine("OK");
 
-                    // Registar instante de início
-                    DateTime startTime = DateTime.UtcNow;
-                    int frameCount = 0;
+                    // Reiniciar instante de início após identificação do sensor
+                    startTime = DateTime.UtcNow;
 
                     // Ler frames até STREAM_END ou ligação fechar
                     string line;
@@ -391,7 +393,7 @@ namespace Gateway
                         if (lineParts[0] == "FRAME")
                         {
                             frameCount++;
-                            Console.WriteLine($"[VIDEO] Sensor '{sensorId}' — frame {(lineParts.Length >= 3 ? lineParts[2] : frameCount.ToString())} recebido.");
+                            Console.WriteLine($"[VIDEO] Sensor '{sensorId}' — frame {(lineParts.Length >= 2 ? lineParts[1] : frameCount.ToString())} recebido.");
                         }
                         else if (lineParts[0] == "STREAM_END")
                         {
@@ -399,27 +401,6 @@ namespace Gateway
                             break;
                         }
                     }
-
-                    // Calcular duração e guardar metadados
-                    TimeSpan duracao = DateTime.UtcNow - startTime;
-
-                    lock (videoLogLock)
-                    {
-                        string logFile = "video_metadata.log";
-                        bool escreverCabecalho = !File.Exists(logFile) || new FileInfo(logFile).Length == 0;
-
-                        using (var logWriter = new StreamWriter(logFile, append: true, Encoding.UTF8))
-                        {
-                            if (escreverCabecalho)
-                            {
-                                logWriter.WriteLine("sensor_id,inicio_utc,duracao_segundos");
-                            }
-
-                            logWriter.WriteLine($"{sensorId},{startTime:yyyy-MM-ddTHH:mm:ss},{duracao.TotalSeconds:F2}");
-                        }
-                    }
-
-                    Console.WriteLine($"[VIDEO] Metadados do sensor '{sensorId}' registados em video_metadata.log.");
                 }
             }
             catch (Exception ex)
@@ -428,6 +409,24 @@ namespace Gateway
             }
             finally
             {
+                // Sempre guarda metadados, mesmo em caso de falha TCP
+                TimeSpan duracao = DateTime.UtcNow - startTime;
+
+                lock (videoLogLock)
+                {
+                    string logFile = "video_metadata.log";
+                    bool escreverCabecalho = !File.Exists(logFile) || new FileInfo(logFile).Length == 0;
+
+                    using (var logWriter = new StreamWriter(logFile, append: true, Encoding.UTF8))
+                    {
+                        if (escreverCabecalho)
+                            logWriter.WriteLine("sensor_id,inicio_utc,duracao_segundos");
+
+                        logWriter.WriteLine($"{sensorId},{startTime:yyyy-MM-ddTHH:mm:ss},{duracao.TotalSeconds:F2}");
+                    }
+                }
+
+                Console.WriteLine($"[VIDEO] Metadados do sensor '{sensorId}' registados em video_metadata.log.");
                 client.Close();
             }
         }
