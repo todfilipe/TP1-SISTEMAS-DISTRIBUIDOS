@@ -218,9 +218,13 @@ namespace Gateway
         {
             string currentSensorId = "UNKNOWN";
             SensorState state = SensorState.AGUARDA_CONNECT;
+            string endpoint = sensorClient.Client.RemoteEndPoint?.ToString() ?? "desconhecido";
 
             try
             {
+                // Timeout de 10s para a fase de handshake (CONNECT + REGISTER_TYPES)
+                sensorClient.ReceiveTimeout = 10_000;
+
                 using (var stream = sensorClient.GetStream())
                 using (var reader = new StreamReader(stream, Encoding.UTF8))
                 using (var writer = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true })
@@ -296,6 +300,9 @@ namespace Gateway
                                 state = SensorState.OPERACIONAL;
                                 Console.WriteLine($"[SENSOR '{currentSensorId}'] registou tipos: {parts[1]}");
                                 writer.WriteLine("OK_TYPES_REGISTERED");
+
+                                // Handshake completo — remover timeout de 10s
+                                sensorClient.ReceiveTimeout = 0;
                                 break;
 
                             case "DATA":
@@ -383,6 +390,13 @@ namespace Gateway
                         }
                     }
                 }
+            }
+            catch (IOException ex) when (ex.InnerException is SocketException se && se.SocketErrorCode == SocketError.TimedOut)
+            {
+                // Timeout de handshake — 10 segundos expirados sem completar CONNECT+REGISTER_TYPES
+                string sensorLabel = currentSensorId != "UNKNOWN" ? currentSensorId : endpoint;
+                string timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss");
+                Console.WriteLine($"[GATEWAY] HANDSHAKE_TIMEOUT sensor={sensorLabel} ts={timestamp} — ligação fechada após 10s sem completar CONNECT+REGISTER_TYPES");
             }
             catch (Exception ex)
             {
