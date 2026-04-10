@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 
 namespace Servidor
 {
@@ -7,6 +8,7 @@ namespace Servidor
     /// Inicia o servidor TCP na porta 9090 (ou porta passada como argumento).
     /// Uso: dotnet run [porta]
     /// Exemplo: dotnet run 9090
+    /// Teste: dotnet run -- test
     /// </summary>
     class Program
     {
@@ -50,13 +52,11 @@ namespace Servidor
             Console.WriteLine("  TESTE DE ARMAZENAMENTO CSV - DataStore  ");
             Console.WriteLine("═══════════════════════════════════════════\n");
 
-            // Usar pasta temporária para o teste (não contaminar data/ real)
             string testDir = Path.Combine(Path.GetTempPath(), "datastore_test_" + Guid.NewGuid().ToString("N")[..8]);
             DataStore store = new DataStore(testDir);
 
             Console.WriteLine($"[Teste] Diretório de teste: {testDir}\n");
 
-            // Medições de teste — uma para cada tipo de dado
             var medicoes = new (string sensorId, string tipo, string valor, string zona, string timestamp)[]
             {
                 ("S101", "TEMP",  "22.5",  "ZONA_CENTRO",      "2026-03-10T09:15:00"),
@@ -74,19 +74,18 @@ namespace Servidor
             int sucesso = 0, falha = 0;
             foreach (var m in medicoes)
             {
-                string? erro = store.ArmazenarMedicao(m.sensorId, m.tipo, m.valor, m.zona, m.timestamp);
-                if (erro == null)
+                ResultadoArmazenamento resultado = store.ArmazenarMedicao(m.sensorId, m.tipo, m.valor, m.zona, m.timestamp);
+                if (resultado == ResultadoArmazenamento.Sucesso)
                 {
                     sucesso++;
                 }
                 else
                 {
                     falha++;
-                    Console.WriteLine($"  [FALHA] {m.sensorId} {m.tipo} {m.valor} -> {erro}");
+                    Console.WriteLine($"  [FALHA] {m.sensorId} {m.tipo} {m.valor} -> {resultado}");
                 }
             }
 
-            // Testes de validação (devem falhar)
             Console.WriteLine("\n--- Testes de validação (devem ser rejeitados) ---");
 
             var invalidos = new (string sensorId, string tipo, string valor, string zona, string timestamp, string descricao)[]
@@ -101,11 +100,11 @@ namespace Servidor
             int rejeicoes = 0;
             foreach (var m in invalidos)
             {
-                string? erro = store.ArmazenarMedicao(m.sensorId, m.tipo, m.valor, m.zona, m.timestamp);
-                if (erro != null)
+                ResultadoArmazenamento resultado = store.ArmazenarMedicao(m.sensorId, m.tipo, m.valor, m.zona, m.timestamp);
+                if (resultado != ResultadoArmazenamento.Sucesso)
                 {
                     rejeicoes++;
-                    Console.WriteLine($"  [OK] {m.descricao} -> {erro}");
+                    Console.WriteLine($"  [OK] {m.descricao} -> {resultado}");
                 }
                 else
                 {
@@ -113,7 +112,6 @@ namespace Servidor
                 }
             }
 
-            // Mostrar conteúdo dos CSVs gerados
             Console.WriteLine("\n═══════════════════════════════════════════");
             Console.WriteLine("  CONTEÚDO DOS FICHEIROS CSV GERADOS");
             Console.WriteLine("═══════════════════════════════════════════\n");
@@ -126,7 +124,6 @@ namespace Servidor
                 Console.WriteLine(File.ReadAllText(f));
             }
 
-            // Resumo
             Console.WriteLine("═══════════════════════════════════════════");
             Console.WriteLine($"  Medições armazenadas: {sucesso}/{medicoes.Length}");
             Console.WriteLine($"  Dados inválidos rejeitados: {rejeicoes}/{invalidos.Length}");
@@ -134,9 +131,8 @@ namespace Servidor
             Console.WriteLine("═══════════════════════════════════════════");
 
             bool todosSucessos = sucesso == medicoes.Length && rejeicoes == invalidos.Length;
-            Console.WriteLine(todosSucessos ? "\n  ✅ TODOS OS TESTES PASSARAM!\n" : "\n  ❌ ALGUNS TESTES FALHARAM!\n");
+            Console.WriteLine(todosSucessos ? "\n  TODOS OS TESTES PASSARAM!\n" : "\n  ALGUNS TESTES FALHARAM!\n");
 
-            // Limpar diretório de teste
             try { Directory.Delete(testDir, true); } catch { }
         }
     }
