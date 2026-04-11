@@ -42,6 +42,18 @@ namespace Gateway
             return $"{SensorId}:{Estado}:{Zona}:{tipos}:{syncStr}";
         }
 
+        public SensorConfig Clone()
+        {
+            return new SensorConfig
+            {
+                SensorId  = this.SensorId,
+                Estado    = this.Estado,
+                Zona      = this.Zona,
+                TiposDados = new List<string>(this.TiposDados),
+                LastSync  = this.LastSync
+            };
+        }
+
         public override string ToString()
         {
             return $"Sensor {SensorId} | Estado: {Estado} | Zona: {Zona} | Tipos: [{string.Join(",", TiposDados)}] | LastSync: {LastSync:yyyy-MM-ddTHH:mm:ss}";

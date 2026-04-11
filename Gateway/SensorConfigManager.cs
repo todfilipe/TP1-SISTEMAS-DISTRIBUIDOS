@@ -272,7 +272,7 @@ namespace Gateway
             lock (_lock)
             {
                 if (_sensors.TryGetValue(sensorId, out SensorConfig config))
-                    return config;
+                    return config.Clone();   // snapshot thread-safe
 
                 return null;
             }
@@ -289,7 +289,7 @@ namespace Gateway
         {
             lock (_lock)
             {
-                return new List<SensorConfig>(_sensors.Values);
+                return _sensors.Values.Select(s => s.Clone()).ToList();
             }
         }
 

@@ -74,14 +74,17 @@ public class SensorClient : IDisposable
     /// </summary>
     public string SendConnect()
     {
-        SendMessage($"CONNECT {_sensorId}");
-        string response = ReadResponse();
+        lock (_sendLock)
+        {
+            SendMessage($"CONNECT {_sensorId}");
+            string response = ReadResponse();
 
-        // Verificar resposta: OK_CONNECTED <sensor_id>
-        if (response == $"OK_CONNECTED {_sensorId}")
-            _connected = true;
+            // Verificar resposta: OK_CONNECTED <sensor_id>
+            if (response == $"OK_CONNECTED {_sensorId}")
+                _connected = true;
 
-        return response;
+            return response;
+        }
     }
 
     /// <summary>
@@ -92,14 +95,17 @@ public class SensorClient : IDisposable
         if (!_connected)
             return "ERR: Deve enviar CONNECT primeiro.";
 
-        string typesStr = string.Join(",", types);
-        SendMessage($"REGISTER_TYPES {typesStr}");
-        string response = ReadResponse();
+        lock (_sendLock)
+        {
+            string typesStr = string.Join(",", types);
+            SendMessage($"REGISTER_TYPES {typesStr}");
+            string response = ReadResponse();
 
-        if (response == "OK_TYPES_REGISTERED")
-            _typesRegistered = true;
+            if (response == "OK_TYPES_REGISTERED")
+                _typesRegistered = true;
 
-        return response;
+            return response;
+        }
     }
 
     /// <summary>

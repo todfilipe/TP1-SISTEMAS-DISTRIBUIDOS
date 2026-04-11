@@ -44,7 +44,7 @@ namespace Gateway
             // Validação dos parâmetros de arranque
             if (args.Length < 1)
             {
-                Console.WriteLine("Uso: Gateway <gateway_id> [server_ip] [server_port]");
+                Console.WriteLine("Uso: Gateway <gateway_id> [server_ip] [server_port] [video_port] [sensor_port]");
                 return;
             }
 
@@ -52,6 +52,7 @@ namespace Gateway
             string serverIp = args.Length >= 2 ? args[1] : "127.0.0.1";
             int serverPort = args.Length >= 3 && int.TryParse(args[2], out int p) ? p : 9090;
             int videoPort = args.Length >= 4 && int.TryParse(args[3], out int vp) ? vp : 8081;
+            int sensorPort = args.Length >= 5 && int.TryParse(args[4], out int sp) ? sp : 8080;
 
             Console.WriteLine($"[GATEWAY] A iniciar com ID: {gatewayId}");
 
@@ -63,7 +64,7 @@ namespace Gateway
 
                 // Inicializar leitores/escritores (UTF-8) com AutoFlush no StreamWriter
                 serverReader = new StreamReader(stream, Encoding.UTF8);
-                serverWriter = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true };
+                serverWriter = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true, NewLine = "\n" };
 
                 // Enviar a mensagem inicial de conexão ao Servidor
                 serverWriter.WriteLine($"GW_CONNECT {gatewayId}");
@@ -163,9 +164,9 @@ namespace Gateway
             TcpListener sensorListener = null;
             try
             {
-                sensorListener = new TcpListener(IPAddress.Any, 8080);
+                sensorListener = new TcpListener(IPAddress.Any, sensorPort);
                 sensorListener.Start();
-                Console.WriteLine("[GATEWAY] A escutar Sensores na porta 8080...");
+                Console.WriteLine($"[GATEWAY] A escutar Sensores na porta {sensorPort}...");
 
                 // Ciclo principal que aceita novos sensores concorrentemente
                 while (isRunning)
@@ -193,6 +194,23 @@ namespace Gateway
             finally
             {
                 sensorListener?.Stop();
+                retryBuffer?.Stop();
+                heartbeatMonitor?.Stop();
+
+                // Enviar GW_DISCONNECT antes de fechar a ligação ao Servidor
+                lock (serverLock)
+                {
+                    try
+                    {
+                        serverWriter?.WriteLine($"GW_DISCONNECT {gatewayId}");
+                        Console.WriteLine($"[GATEWAY] GW_DISCONNECT enviado ao Servidor no encerramento.");
+                    }
+                    catch
+                    {
+                        // Servidor pode já estar desligado — ignorar
+                    }
+                }
+
                 serverClient?.Close();
             }
         }
@@ -243,7 +261,7 @@ namespace Gateway
             {
                 using (var stream = sensorClient.GetStream())
                 using (var reader = new StreamReader(stream, Encoding.UTF8))
-                using (var writer = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true })
+                using (var writer = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true, NewLine = "\n" })
                 {
                     string line;
 
@@ -279,7 +297,7 @@ namespace Gateway
                                 if (sensorCfg != null)
                                 {
                                     // Verificar se o sensor está num estado que permite conexão
-                                    if (sensorCfg.Estado == "desativado" || sensorCfg.Estado == "manutencao")
+                                    if (sensorCfg.Estado != "ativo")
                                     {
                                         Console.WriteLine($"[SENSOR '{currentSensorId}'] rejeitado — estado actual: {sensorCfg.Estado}.");
                                         writer.WriteLine("ERR_SENSOR_INACTIVE");
@@ -358,9 +376,9 @@ namespace Gateway
                                 else
                                 {
                                     // Envio falhou — guardar no buffer para retentativa automática
-                                    Console.WriteLine($"[ERRO] Servidor respondeu: {serverResponse} — mensagem adicionada ao buffer de retentativa.");
+                                    Console.WriteLine($"[AVISO] Servidor indisponível — mensagem adicionada ao buffer de retentativa: {validationResult.ForwardMessage}");
                                     retryBuffer.Enqueue(validationResult.ForwardMessage);
-                                    writer.WriteLine("ERR_SERVER");
+                                    writer.WriteLine("OK");   // Sensor continua normalmente
                                 }
                                 break;
 
@@ -381,6 +399,13 @@ namespace Gateway
                                 if (parts.Length < 2)
                                 {
                                     writer.WriteLine("ERR_INVALID_DATA");
+                                    break;
+                                }
+
+                                // Verificar se o sensor já fez CONNECT antes de aceitar DISCONNECT
+                                if (state == SensorState.AGUARDA_CONNECT)
+                                {
+                                    writer.WriteLine("ERR_SEQUENCE");
                                     break;
                                 }
 
@@ -434,7 +459,7 @@ namespace Gateway
             {
                 using (var stream = client.GetStream())
                 using (var reader = new StreamReader(stream, Encoding.UTF8))
-                using (var writer = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true })
+                using (var writer = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true, NewLine = "\n" })
                 {
                     // Ler primeira linha: VIDEO_STREAM <sensor_id>
                     string firstLine = reader.ReadLine();
