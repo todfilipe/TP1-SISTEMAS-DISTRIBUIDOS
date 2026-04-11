@@ -30,6 +30,9 @@ namespace Gateway
         // Monitor de heartbeats dos sensores (deteta timeouts)
         static HeartbeatGateway heartbeatMonitor;
 
+        // Buffer local para retentativa de mensagens falhadas GW→Servidor
+        static RetryBuffer retryBuffer;
+
         // Objeto de sincronização para garantir exclusão mútua na comunicação com o Servidor
         static readonly object serverLock = new object();
 
@@ -82,7 +85,11 @@ namespace Gateway
                 int loaded = configManager.LoadConfig();
                 Console.WriteLine($"[GATEWAY] Configuração de sensores carregada ({loaded} sensor(es)).");
 
-                // 1.2 Iniciar o monitor de heartbeats (deteta sensores com timeout)
+                // 1.2 Iniciar o buffer de retentativa (mensagens falhadas GW→Servidor)
+                retryBuffer = new RetryBuffer(SendToServer);
+                retryBuffer.Start();
+
+                // 1.3 Iniciar o monitor de heartbeats (deteta sensores com timeout)
                 heartbeatMonitor = new HeartbeatGateway(configManager, SendToServer);
                 heartbeatMonitor.Start();
             }
@@ -99,6 +106,7 @@ namespace Gateway
                 Console.WriteLine("\n[GATEWAY] A encerrar Gateway...");
                 e.Cancel = true; // Impede terminação imediata
                 isRunning = false;
+                retryBuffer?.Stop();
                 heartbeatMonitor?.Stop();
 
                 lock (serverLock)
@@ -218,6 +226,18 @@ namespace Gateway
         {
             string currentSensorId = "UNKNOWN";
             SensorState state = SensorState.AGUARDA_CONNECT;
+            const int HandshakeTimeoutMs = 10000; // 10 segundos para completar CONNECT + REGISTER_TYPES
+            bool handshakeCompleted = false;
+
+            // Timer que fecha a ligação se o handshake não completar em 10s
+            Timer handshakeTimer = new Timer(_ =>
+            {
+                if (!handshakeCompleted)
+                {
+                    Console.WriteLine($"[TIMEOUT] Sensor '{currentSensorId}' não completou o handshake em {HandshakeTimeoutMs / 1000}s — a fechar ligação.");
+                    try { sensorClient.Close(); } catch { }
+                }
+            }, null, HandshakeTimeoutMs, Timeout.Infinite);
 
             try
             {
@@ -294,6 +314,8 @@ namespace Gateway
                                 }
 
                                 state = SensorState.OPERACIONAL;
+                                handshakeCompleted = true;
+                                handshakeTimer.Dispose(); // Handshake concluído, cancelar o timeout
                                 Console.WriteLine($"[SENSOR '{currentSensorId}'] registou tipos: {parts[1]}");
                                 writer.WriteLine("OK_TYPES_REGISTERED");
                                 break;
@@ -335,7 +357,9 @@ namespace Gateway
                                 }
                                 else
                                 {
-                                    Console.WriteLine($"[ERRO] Servidor respondeu: {serverResponse}");
+                                    // Envio falhou — guardar no buffer para retentativa automática
+                                    Console.WriteLine($"[ERRO] Servidor respondeu: {serverResponse} — mensagem adicionada ao buffer de retentativa.");
+                                    retryBuffer.Enqueue(validationResult.ForwardMessage);
                                     writer.WriteLine("ERR_SERVER");
                                 }
                                 break;
@@ -390,6 +414,7 @@ namespace Gateway
             }
             finally
             {
+                handshakeTimer.Dispose();
                 sensorClient.Close();
                 Console.WriteLine($"[GATEWAY] Atendimento ao SENSOR '{currentSensorId}' finalizado.");
             }
