@@ -96,18 +96,21 @@ namespace Gateway
                 };
             }
 
-            // ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
             //  PASSO 2 — Validação de Estado
-            //  O sensor tem de estar no estado "ativo"
+            //  O sensor não pode estar banido ("desativado") ou em "manutencao"
+            //  Se estiver "ativo", "indisponivel" ou "desligado", deixamos passar.
             // ═══════════════════════════════════════════════════════
 
-            if (!string.Equals(sensor.Estado, "ativo", StringComparison.OrdinalIgnoreCase))
+            string estadoActual = sensor.Estado.ToLower();
+
+            if (estadoActual == "desativado" || estadoActual == "manutencao")
             {
                 return new DataValidationResult
                 {
                     IsValid = false,
                     ErrorCode = "ERR_SENSOR_INACTIVE",
-                    LogMessage = $"[VALIDAÇÃO] Sensor '{sensorId}' não está ativo (estado actual: '{sensor.Estado}')."
+                    LogMessage = $"[VALIDAÇÃO] Sensor '{sensorId}' rejeitado. Estado não permite ligação: '{sensor.Estado}'."
                 };
             }
 

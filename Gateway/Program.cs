@@ -294,29 +294,30 @@ namespace Gateway
 
                                 // Validar o sensor contra a configuração CSV
                                 SensorConfig sensorCfg = configManager?.GetSensor(currentSensorId);
-                                if (sensorCfg != null)
-                                {
-                                    // Verificar se o sensor está num estado que permite conexão
-                                    if (sensorCfg.Estado != "ativo")
-                                    {
-                                        Console.WriteLine($"[SENSOR '{currentSensorId}'] rejeitado — estado actual: {sensorCfg.Estado}.");
-                                        writer.WriteLine("ERR_SENSOR_INACTIVE");
-                                        return;
-                                    }
-                                    Console.WriteLine($"[CONFIG] Sensor '{currentSensorId}' validado (zona: {sensorCfg.Zona}, estado: {sensorCfg.Estado}).");
-                                }
-                                else
+                                
+                                // 1º - O sensor existe sequer no ficheiro? (Se for null, não existe)
+                                if (sensorCfg == null)
                                 {
                                     Console.WriteLine($"[CONFIG] Sensor '{currentSensorId}' não existe no CSV — ligação rejeitada (ERR_NOT_REGISTERED).");
                                     writer.WriteLine("ERR_NOT_REGISTERED");
                                     return;
                                 }
 
+                                // 2º - O sensor existe! Mas está banido ou em manutenção?
+                                string estadoActual = sensorCfg.Estado?.ToLower();
+                                if (estadoActual == "desativado" || estadoActual == "manutencao")
+                                {
+                                    Console.WriteLine($"[SENSOR '{currentSensorId}'] rejeitado — estado actual: {sensorCfg.Estado}.");
+                                    writer.WriteLine("ERR_SENSOR_INACTIVE");
+                                    return;
+                                }
+
+                                // 3º - Se chegou aqui, existe e NÃO está banido. Pode entrar!
                                 state = SensorState.AGUARDA_REGISTER_TYPES;
                                 Console.WriteLine($"[SENSOR '{currentSensorId}'] conectou-se.");
                                 writer.WriteLine($"OK_CONNECTED {currentSensorId}");
                                 break;
-
+                                
                             case "REGISTER_TYPES":
                                 // REGISTER_TYPES <t1,t2,...>
                                 if (parts.Length < 2)
