@@ -187,17 +187,18 @@ namespace Gateway
             }
 
             // ═══════════════════════════════════════════════════════
-            //  PASSO 4c — Validação de Zona
-            //  Tem de ser uma das zonas definidas como válidas
+            //  PASSO 4c — Validação de Zona (Cross-Check com CSV)
+            //  Verifica se a zona enviada pelo sensor é exatamente a
+            //  zona que lhe foi atribuída no ficheiro sensors.csv
             // ═══════════════════════════════════════════════════════
 
-            if (!ZonasValidas.Contains(zona))
+            if (!string.Equals(zona, sensor.Zona, StringComparison.OrdinalIgnoreCase))
             {
                 return new DataValidationResult
                 {
                     IsValid = false,
                     ErrorCode = "ERR_INVALID_DATA",
-                    LogMessage = $"[VALIDAÇÃO] Zona '{zona}' inválida. Zonas permitidas: {string.Join(", ", ZonasValidas)}."
+                    LogMessage = $"[VALIDAÇÃO] Fraude ou erro de zona detetado! O sensor '{sensorId}' enviou '{zona}', mas está registado na '{sensor.Zona}'."
                 };
             }
 

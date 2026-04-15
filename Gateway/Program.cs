@@ -81,7 +81,7 @@ namespace Gateway
                 Console.WriteLine("[GATEWAY] Ligado com sucesso ao Servidor (recebido OK_GW_CONNECTED).");
 
                 // 1.1 Carregar a configuração dos sensores a partir do ficheiro CSV
-                string csvPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "sensors.csv");
+                string csvPath = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, @"..\..\..\sensors.csv"));
                 configManager = new SensorConfigManager(csvPath);
                 int loaded = configManager.LoadConfig();
                 Console.WriteLine($"[GATEWAY] Configuração de sensores carregada ({loaded} sensor(es)).");
@@ -317,7 +317,7 @@ namespace Gateway
                                 Console.WriteLine($"[SENSOR '{currentSensorId}'] conectou-se.");
                                 writer.WriteLine($"OK_CONNECTED {currentSensorId}");
                                 break;
-                                
+
                             case "REGISTER_TYPES":
                                 // REGISTER_TYPES <t1,t2,...>
                                 if (parts.Length < 2)
