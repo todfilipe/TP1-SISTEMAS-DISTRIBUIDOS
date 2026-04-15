@@ -214,7 +214,7 @@ public class SensorClient : IDisposable
             vWriter.WriteLine($"VIDEO_STREAM {_sensorId}");
             string resp = vReader.ReadLine() ?? "ERR: Sem resposta.";
 
-            if (resp != "OK")
+            if (resp != "OK_VIDEO_STARTED")
             {
                 videoClient.Close();
                 return $"ERR: Handshake vídeo falhou: {resp}";

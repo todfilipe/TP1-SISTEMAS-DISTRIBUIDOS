@@ -369,7 +369,7 @@ namespace Gateway
                                 if (!tiposValidos)
                                 {
                                     Console.WriteLine($"[AVISO] Sensor '{currentSensorId}' tentou registar tipos não autorizados.");
-                                    writer.WriteLine("ERR_INVALID_TYPES");
+                                    writer.WriteLine("ERR_TYPE_NOT_SUPPORTED");
                                     break; // Não passa para OPERACIONAL!
                                 }
                                 // FIM DA VERIFICAÇÃO NOVA
@@ -411,7 +411,11 @@ namespace Gateway
                                     break;
                                 }
                                 // Se ele estava 'indisponivel' ou 'desligado', volta a ficar 'ativo'.
-                                configManager?.ChangeSensorStatus(currentSensorId, "ativo");
+                                var sensorAtual = configManager?.GetSensor(currentSensorId);
+                                if (sensorAtual != null && (sensorAtual.Estado == "indisponivel" || sensorAtual.Estado == "desligado"))
+                                {
+                                    configManager?.ChangeSensorStatus(currentSensorId, "ativo");
+                                }
 
                                 // ── Encaminhar para o Servidor ──
                                 // A mensagem FORWARD já foi construída pelo validador
@@ -438,7 +442,11 @@ namespace Gateway
                                     break;
                                 }
                                 Console.WriteLine($"[SENSOR '{currentSensorId}'] heartbeat recebido.");
-                                configManager?.ChangeSensorStatus(currentSensorId, "ativo"); 
+                                var sensorHb = configManager?.GetSensor(currentSensorId);
+                                if (sensorHb != null && (sensorHb.Estado == "indisponivel" || sensorHb.Estado == "desligado"))
+                                {
+                                    configManager?.ChangeSensorStatus(currentSensorId, "ativo");
+                                }
                                 writer.WriteLine("OK");
                                 configManager?.UpdateLastSync(currentSensorId, DateTime.UtcNow);
                                 break;
@@ -537,7 +545,7 @@ namespace Gateway
                     Console.WriteLine($"[VIDEO] Stream iniciada pelo sensor '{sensorId}'.");
 
                     // Responder com OK (confirmação no canal de vídeo)
-                    writer.WriteLine("OK");
+                    writer.WriteLine("OK_VIDEO_STARTED");
 
                     // Reiniciar instante de início após identificação do sensor
                     startTime = DateTime.UtcNow;
