@@ -332,6 +332,32 @@ namespace Gateway
                                     break;
                                 }
 
+                                // AQUI COMEÇA A VERIFICAÇÃO NOVA:
+                                string[] tiposEnviados = parts[1].Split(',');
+                                SensorConfig configSensor = configManager?.GetSensor(currentSensorId);
+                                
+                                bool tiposValidos = true;
+                                if (configSensor != null)
+                                {
+                                    foreach (string tipo in tiposEnviados)
+                                    {
+                                        // Se o sensor enviar um tipo que NÃO está na sua lista do CSV, chumba!
+                                        if (!configSensor.TiposDados.Contains(tipo, StringComparer.OrdinalIgnoreCase))
+                                        {
+                                            tiposValidos = false;
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                if (!tiposValidos)
+                                {
+                                    Console.WriteLine($"[AVISO] Sensor '{currentSensorId}' tentou registar tipos não autorizados.");
+                                    writer.WriteLine("ERR_INVALID_TYPES");
+                                    break; // Não passa para OPERACIONAL!
+                                }
+                                // FIM DA VERIFICAÇÃO NOVA
+
                                 state = SensorState.OPERACIONAL;
                                 handshakeCompleted = true;
                                 handshakeTimer.Dispose(); // Handshake concluído, cancelar o timeout
