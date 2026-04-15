@@ -365,6 +365,8 @@ namespace Gateway
                                     writer.WriteLine(validationResult.ErrorCode);
                                     break;
                                 }
+                                // Se ele estava 'indisponivel' ou 'desligado', volta a ficar 'ativo'.
+                                configManager?.ChangeSensorStatus(currentSensorId, "ativo");
 
                                 // ── Encaminhar para o Servidor ──
                                 // A mensagem FORWARD já foi construída pelo validador
@@ -391,6 +393,7 @@ namespace Gateway
                                     break;
                                 }
                                 Console.WriteLine($"[SENSOR '{currentSensorId}'] heartbeat recebido.");
+                                configManager?.ChangeSensorStatus(currentSensorId, "ativo"); 
                                 writer.WriteLine("OK");
                                 configManager?.UpdateLastSync(currentSensorId, DateTime.UtcNow);
                                 break;

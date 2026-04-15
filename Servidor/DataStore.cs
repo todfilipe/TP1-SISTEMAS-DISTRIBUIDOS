@@ -153,25 +153,53 @@ namespace Servidor
         }
 
         /// <summary>
-        /// Regista uma alteração de estado de um sensor (para log/consulta futura).
+        /// Regista uma alteração de estado de um sensor.
+        /// Substitui o estado anterior para que exista apenas uma linha por sensor no ficheiro.
         /// </summary>
         public void RegistarEstadoSensor(string sensorId, string estado)
         {
             Console.WriteLine($"[DataStore] Estado do sensor atualizado: {sensorId} -> {estado}");
 
             string filePath = Path.Combine(_dataDirectory, "sensor_status.csv");
-            string linha = $"{sensorId},{estado},{DateTime.UtcNow:yyyy-MM-ddTHH:mm:ss}";
+            string novaLinha = $"{sensorId},{estado},{DateTime.UtcNow:yyyy-MM-ddTHH:mm:ss}";
 
             object fileLock = GetLockForType("sensor_status");
             try
             {
                 lock (fileLock)
                 {
-                    if (!File.Exists(filePath))
+                    // Dicionário para guardar a última linha de cada sensor
+                    var estadosAtuais = new Dictionary<string, string>();
+
+                    // 1. Ler o ficheiro atual (se existir)
+                    if (File.Exists(filePath))
                     {
-                        File.WriteAllText(filePath, "sensor_id,estado,timestamp\n");
+                        string[] linhas = File.ReadAllLines(filePath);
+                        
+                        // Começa no i=1 para ignorar o cabeçalho
+                        for (int i = 1; i < linhas.Length; i++) 
+                        {
+                            if (string.IsNullOrWhiteSpace(linhas[i])) continue;
+                            
+                            string[] partes = linhas[i].Split(',');
+                            if (partes.Length > 0)
+                            {
+                                // Guarda a linha inteira associada ao ID do sensor
+                                estadosAtuais[partes[0]] = linhas[i]; 
+                            }
+                        }
                     }
-                    File.AppendAllText(filePath, linha + "\n");
+
+                    // 2. Atualizar ou inserir a nova linha do sensor recebido
+                    estadosAtuais[sensorId] = novaLinha;
+
+                    // 3. Montar a lista final para gravar
+                    List<string> paraGravar = new List<string>();
+                    paraGravar.Add("sensor_id,estado,timestamp"); // Volta a pôr o cabeçalho
+                    paraGravar.AddRange(estadosAtuais.Values);    // Adiciona os sensores todos
+
+                    // 4. Gravar substituindo o ficheiro antigo (WriteAllLines em vez de Append)
+                    File.WriteAllLines(filePath, paraGravar);
                 }
             }
             catch (Exception ex)
