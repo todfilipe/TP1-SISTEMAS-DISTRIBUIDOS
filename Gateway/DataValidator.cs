@@ -77,7 +77,8 @@ namespace Gateway
         public static DataValidationResult ValidateAndProcessData(
             string rawMessage,
             string sensorId,
-            SensorConfigManager configManager)
+            SensorConfigManager configManager,
+            List<string> sessionTypes = null)
         {
             // ═══════════════════════════════════════════════════════
             //  PASSO 1 — Validação de Registo
@@ -131,7 +132,13 @@ namespace Gateway
             string tipoDado = parts.Length >= 2 ? parts[1] : "";
 
             bool tipoAutorizado = false;
-            foreach (string t in sensor.TiposDados)
+
+            // Se a sessão tem tipos registados, usar essa lista (mais restrita)
+            var listaAVerificar = (sessionTypes != null && sessionTypes.Count > 0)
+                ? sessionTypes
+                : sensor.TiposDados;
+
+            foreach (string t in listaAVerificar)
             {
                 if (string.Equals(t, tipoDado, StringComparison.OrdinalIgnoreCase))
                 {
@@ -146,8 +153,8 @@ namespace Gateway
                 {
                     IsValid = false,
                     ErrorCode = "ERR_TYPE_NOT_SUPPORTED",
-                    LogMessage = $"[VALIDAÇÃO] Tipo '{tipoDado}' não autorizado para o sensor '{sensorId}'. " +
-                                 $"Tipos permitidos: [{string.Join(",", sensor.TiposDados)}]."
+                    LogMessage = $"[VALIDAÇÃO] Tipo '{tipoDado}' não foi registado nesta sessão " +
+                                 $"pelo sensor '{sensorId}'. Tipos da sessão: [{string.Join(",", listaAVerificar)}]."
                 };
             }
 

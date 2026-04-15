@@ -39,6 +39,10 @@ namespace Gateway
         // Lock para acesso thread-safe ao ficheiro de metadados de vídeo
         static readonly object videoLogLock = new object();
 
+        // Controlo de sessões ativas por sensor_id (evita sessões duplicadas)
+        static readonly HashSet<string> _activeSessions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        static readonly object _sessionLock = new object();
+
         static void Main(string[] args)
         {
             // Validação dos parâmetros de arranque
@@ -246,6 +250,7 @@ namespace Gateway
             SensorState state = SensorState.AGUARDA_CONNECT;
             const int HandshakeTimeoutMs = 10000; // 10 segundos para completar CONNECT + REGISTER_TYPES
             bool handshakeCompleted = false;
+            List<string> sessionTypes = new List<string>();
 
             // Timer que fecha a ligação se o handshake não completar em 10s
             Timer handshakeTimer = new Timer(_ =>
@@ -313,6 +318,17 @@ namespace Gateway
                                 }
 
                                 // 3º - Se chegou aqui, existe e NÃO está banido. Pode entrar!
+                                // Verificar se já existe uma sessão ativa para este sensor
+                                lock (_sessionLock)
+                                {
+                                    if (_activeSessions.Contains(currentSensorId))
+                                    {
+                                        Console.WriteLine($"[GATEWAY] Sessão duplicada rejeitada para '{currentSensorId}'.");
+                                        writer.WriteLine("ERR_ALREADY_CONNECTED");
+                                        return;
+                                    }
+                                    _activeSessions.Add(currentSensorId);
+                                }
                                 state = SensorState.AGUARDA_REGISTER_TYPES;
                                 Console.WriteLine($"[SENSOR '{currentSensorId}'] conectou-se.");
                                 writer.WriteLine($"OK_CONNECTED {currentSensorId}");
@@ -358,6 +374,9 @@ namespace Gateway
                                 }
                                 // FIM DA VERIFICAÇÃO NOVA
 
+                                // Guardar os tipos negociados nesta sessão
+                                sessionTypes = new List<string>(tiposEnviados);
+
                                 state = SensorState.OPERACIONAL;
                                 handshakeCompleted = true;
                                 handshakeTimer.Dispose(); // Handshake concluído, cancelar o timeout
@@ -380,7 +399,7 @@ namespace Gateway
                                 // Delega toda a lógica de validação ao DataValidator,
                                 // que segue a ordem estrita: Registo → Estado → Tipo → Conteúdo → Sucesso
                                 DataValidationResult validationResult =
-                                    DataValidator.ValidateAndProcessData(line, currentSensorId, configManager);
+                                    DataValidator.ValidateAndProcessData(line, currentSensorId, configManager, sessionTypes);
 
                                 // Registar o resultado da validação na consola
                                 Console.WriteLine(validationResult.LogMessage);
@@ -439,18 +458,24 @@ namespace Gateway
                                     break;
                                 }
 
-                                string disconnectId = parts[1];
-                                Console.WriteLine($"[SENSOR '{disconnectId}'] solicitou desconexão.");
+                                // CORREÇÃO: validar que o ID da mensagem corresponde ao sensor desta sessão
+                                if (parts[1] != currentSensorId)
+                                {
+                                    writer.WriteLine("ERR_INVALID_DATA");
+                                    break;
+                                }
+
+                                Console.WriteLine($"[SENSOR '{currentSensorId}'] solicitou desconexão.");
                                 writer.WriteLine("OK_DISCONNECT");
 
                                 // Atualizar o estado do sensor na configuração CSV para 'desligado'
-                                configManager?.ChangeSensorStatus(disconnectId, "desligado");
+                                configManager?.ChangeSensorStatus(currentSensorId, "desligado");
 
                                 // Notificar o Servidor da mudança de estado (sd_rel.pdf secção 6.4)
-                                string statusResponse = SendToServer($"SENSOR_STATUS {disconnectId} desligado");
+                                string statusResponse = SendToServer($"SENSOR_STATUS {currentSensorId} desligado");
                                 if (statusResponse != null)
                                 {
-                                    Console.WriteLine($"[GATEWAY] SENSOR_STATUS enviado ao Servidor para '{disconnectId}'. Resposta: {statusResponse}");
+                                    Console.WriteLine($"[GATEWAY] SENSOR_STATUS enviado ao Servidor para '{currentSensorId}'. Resposta: {statusResponse}");
                                 }
 
                                 return;
@@ -471,6 +496,11 @@ namespace Gateway
             {
                 handshakeTimer.Dispose();
                 sensorClient.Close();
+                // Remover a sessão ativa para este sensor
+                lock (_sessionLock)
+                {
+                    _activeSessions.Remove(currentSensorId);
+                }
                 Console.WriteLine($"[GATEWAY] Atendimento ao SENSOR '{currentSensorId}' finalizado.");
             }
         }
