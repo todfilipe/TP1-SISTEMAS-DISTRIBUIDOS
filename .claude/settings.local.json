@@ -1,7 +1,6 @@
 {
   "permissions": {
     "allow": [
-      "Bash(grep -E \"\\(Sensor|Gateway|Servidor\\)/\\(Program|.*\\\\.cs\\)$\")",
       "Bash(dotnet build:*)"
     ]
   }

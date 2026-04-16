@@ -1,5 +1,7 @@
+using System;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Threading;
 
 namespace OneHealthMonitor.Views
 {
@@ -7,22 +9,26 @@ namespace OneHealthMonitor.Views
     {
         private readonly MainWindow _main;
         private int _gatewayCounter = 1;
+        private bool _isAdding;
 
         public GatewayView(MainWindow main)
         {
             InitializeComponent();
             _main = main;
-            
+
             // Add initial gateway
             AddNewGatewayTab();
         }
 
         private void AddTab_Selected(object sender, RoutedEventArgs e)
         {
-            if (AddTab.IsSelected)
+            if (!AddTab.IsSelected || _isAdding) return;
+            _isAdding = true;
+            Dispatcher.BeginInvoke(new Action(() =>
             {
-                AddNewGatewayTab();
-            }
+                try { AddNewGatewayTab(); }
+                finally { _isAdding = false; }
+            }), DispatcherPriority.Background);
         }
 
         private void AddNewGatewayTab()

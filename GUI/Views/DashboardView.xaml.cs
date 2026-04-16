@@ -17,6 +17,7 @@ namespace OneHealthMonitor.Views
         private readonly DispatcherTimer _blinkTimer;
         private readonly ObservableCollection<LiveDataItem> _liveItems = new();
         private bool _liveDotVisible = true;
+        private readonly Action<LiveDataItem> _dataReceivedHandler;
 
         public DashboardView(MainWindow main)
         {
@@ -46,17 +47,29 @@ namespace OneHealthMonitor.Views
             _blinkTimer.Start();
 
             // Subscribe to global gateway data events
-            _main.OnGlobalDataReceived += item =>
+            _dataReceivedHandler = item =>
             {
-                Application.Current.Dispatcher.Invoke(() =>
+                Application.Current?.Dispatcher?.BeginInvoke(() =>
                 {
                     _liveItems.Insert(0, item);
                     if (_liveItems.Count > 50)
                         _liveItems.RemoveAt(50);
                 });
             };
+            _main.OnGlobalDataReceived += _dataReceivedHandler;
+
+            Unloaded += DashboardView_Unloaded;
 
             RefreshDashboard();
+        }
+
+        private void DashboardView_Unloaded(object sender, RoutedEventArgs e)
+        {
+            _clockTimer?.Stop();
+            _refreshTimer?.Stop();
+            _blinkTimer?.Stop();
+
+            _main.OnGlobalDataReceived -= _dataReceivedHandler;
         }
 
         private void RefreshDashboard()

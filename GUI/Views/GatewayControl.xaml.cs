@@ -15,6 +15,9 @@ namespace OneHealthMonitor.Views
         private readonly MainWindow _main;
         private readonly DispatcherTimer _refreshTimer;
         public GatewayService Service { get; } = new GatewayService();
+        private readonly Action<string> _logMessageHandler;
+        private readonly Action<SensorConfig> _sensorUpdatedHandler;
+        private bool _attached;
 
         public GatewayControl(MainWindow main)
         {
@@ -27,63 +30,102 @@ namespace OneHealthMonitor.Views
                 Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "..", "Gateway", "sensors.csv"));
             TxtCsvPath.Text = defaultCsv;
 
-            // Subscribe to gateway events
-            Service.OnLogMessage += msg =>
+            // Gateway event handlers (subscription toggled by Attach/Detach)
+            _logMessageHandler = msg =>
             {
-                Application.Current.Dispatcher.Invoke(() => AppendLogMessage(msg));
+                Application.Current?.Dispatcher?.BeginInvoke(() => AppendLogMessage(msg));
+            };
+            _sensorUpdatedHandler = sensor =>
+            {
+                Application.Current?.Dispatcher?.BeginInvoke(() => RefreshSensorGrid());
             };
 
-            Service.OnSensorUpdated += sensor =>
-            {
-                Application.Current.Dispatcher.Invoke(() => RefreshSensorGrid());
-            };
-
-            // Refresh timer
+            // Refresh timer (created once, started/stopped by Attach/Detach)
             _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
             _refreshTimer.Tick += (_, _) => RefreshUI();
-            _refreshTimer.Start();
 
+            Loaded += GatewayControl_Loaded;
+            Unloaded += GatewayControl_Unloaded;
+
+            Attach();
             RefreshUI();
+        }
+
+        private void Attach()
+        {
+            if (_attached) return;
+            Service.OnLogMessage += _logMessageHandler;
+            Service.OnSensorUpdated += _sensorUpdatedHandler;
+            _refreshTimer.Start();
+            _attached = true;
+        }
+
+        private void Detach()
+        {
+            if (!_attached) return;
+            _refreshTimer.Stop();
+            Service.OnLogMessage -= _logMessageHandler;
+            Service.OnSensorUpdated -= _sensorUpdatedHandler;
+            _attached = false;
+        }
+
+        private void GatewayControl_Loaded(object sender, RoutedEventArgs e)
+        {
+            if (_attached) return;
+            Attach();
+            RefreshUI();
+        }
+
+        private void GatewayControl_Unloaded(object sender, RoutedEventArgs e)
+        {
+            Detach();
         }
 
         private async void BtnStartStop_Click(object sender, RoutedEventArgs e)
         {
-            if (Service.IsRunning)
+            try
             {
-                Service.Stop();
-                BtnStartStop.Content = "▶  START GATEWAY";
-                BtnStartStop.Style = (Style)FindResource("PrimaryButton");
-                RefreshUI();
-            }
-            else
-            {
-                string gwId = TxtGwId.Text.Trim();
-                string serverIp = TxtServerIp.Text.Trim();
-                if (!int.TryParse(TxtServerPort.Text.Trim(), out int serverPort)) serverPort = 9090;
-                if (!int.TryParse(TxtSensorPort.Text.Trim(), out int sensorPort)) sensorPort = 8080;
-                if (!int.TryParse(TxtVideoPort.Text.Trim(), out int videoPort)) videoPort = 8081;
-                string csvPath = TxtCsvPath.Text.Trim();
-
                 BtnStartStop.IsEnabled = false;
-                BtnStartStop.Content = "CONNECTING...";
 
-                await System.Threading.Tasks.Task.Run(() =>
-                {
-                    Service.Start(gwId, serverIp, serverPort, sensorPort, videoPort, csvPath);
-                });
-
-                BtnStartStop.IsEnabled = true;
                 if (Service.IsRunning)
                 {
-                    BtnStartStop.Content = "⏹  STOP GATEWAY";
-                    BtnStartStop.Style = (Style)FindResource("DangerButton");
+                    Service.Stop();
+                    BtnStartStop.Content = "▶  START GATEWAY";
+                    BtnStartStop.Style = (Style)FindResource("PrimaryButton");
+                    RefreshUI();
                 }
                 else
                 {
-                    BtnStartStop.Content = "▶  START GATEWAY";
-                    BtnStartStop.Style = (Style)FindResource("PrimaryButton");
+                    string gwId = TxtGwId.Text.Trim();
+                    string serverIp = TxtServerIp.Text.Trim();
+                    if (!int.TryParse(TxtServerPort.Text.Trim(), out int serverPort)) serverPort = 9090;
+                    if (!int.TryParse(TxtSensorPort.Text.Trim(), out int sensorPort)) sensorPort = 8080;
+                    if (!int.TryParse(TxtVideoPort.Text.Trim(), out int videoPort)) videoPort = 8081;
+                    string csvPath = TxtCsvPath.Text.Trim();
+
+                    BtnStartStop.Content = "CONNECTING...";
+
+                    await System.Threading.Tasks.Task.Run(() =>
+                    {
+                        Service.Start(gwId, serverIp, serverPort, sensorPort, videoPort, csvPath);
+                    });
+
+                    if (Service.IsRunning)
+                    {
+                        BtnStartStop.Content = "⏹  STOP GATEWAY";
+                        BtnStartStop.Style = (Style)FindResource("DangerButton");
+                    }
+                    else
+                    {
+                        BtnStartStop.Content = "▶  START GATEWAY";
+                        BtnStartStop.Style = (Style)FindResource("PrimaryButton");
+                    }
+                    RefreshUI();
                 }
-                RefreshUI();
+            }
+            finally
+            {
+                BtnStartStop.IsEnabled = true;
             }
         }
 

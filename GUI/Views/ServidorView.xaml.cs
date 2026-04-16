@@ -20,6 +20,8 @@ namespace OneHealthMonitor.Views
         private int _currentPage = 1;
         private const int PageSize = 10;
         private List<MedicaoEntry> _allFilteredData = new();
+        private readonly Action<string> _logMessageHandler;
+        private readonly Action<string, string, string, string, string> _dataStoredHandler;
 
         public ServidorView(MainWindow main)
         {
@@ -27,19 +29,21 @@ namespace OneHealthMonitor.Views
             _main = main;
 
             // Subscribe to server events
-            _main.ServidorService.OnLogMessage += msg =>
+            _logMessageHandler = msg =>
             {
-                Application.Current.Dispatcher.Invoke(() => AppendServerLog(msg));
+                Application.Current?.Dispatcher?.BeginInvoke(() => AppendServerLog(msg));
             };
+            _main.ServidorService.OnLogMessage += _logMessageHandler;
 
-            _main.ServidorService.OnDataStored += (sensorId, tipo, valor, zona, ts) =>
+            _dataStoredHandler = (sensorId, tipo, valor, zona, ts) =>
             {
-                Application.Current.Dispatcher.Invoke(() =>
+                Application.Current?.Dispatcher?.BeginInvoke(() =>
                 {
                     // Refresh stats on new data
                     RefreshStats();
                 });
             };
+            _main.ServidorService.OnDataStored += _dataStoredHandler;
 
             // Refresh timer — every 2s
             _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
@@ -49,8 +53,17 @@ namespace OneHealthMonitor.Views
             // Initial port display
             PortHeader.Text = "9090";
 
+            Unloaded += ServidorView_Unloaded;
+
             // Refresh imediatamente ao carregar a view
-            Loaded += (_, _) => RefreshAll();
+            Loaded += (_, _) => { RefreshAll(); LoadFilteredData(); };
+        }
+
+        private void ServidorView_Unloaded(object sender, RoutedEventArgs e)
+        {
+            _refreshTimer?.Stop();
+            _main.ServidorService.OnLogMessage -= _logMessageHandler;
+            _main.ServidorService.OnDataStored -= _dataStoredHandler;
         }
 
         private void BtnStartStop_Click(object sender, RoutedEventArgs e)
@@ -89,7 +102,7 @@ namespace OneHealthMonitor.Views
             RefreshSensorStatus();
             RefreshFiles();
             RefreshStats();
-            LoadFilteredData(); // atualizar grid de dados automaticamente
+            // LoadFilteredData() removed from auto-refresh to prevent heavy Disk I/O
         }
 
         private void RefreshGateways()

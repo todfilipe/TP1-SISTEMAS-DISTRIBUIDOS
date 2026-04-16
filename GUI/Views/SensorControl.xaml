@@ -168,13 +168,8 @@
                                 <StackPanel Grid.Column="0" Grid.Row="1" Margin="0,0,8,8">
                                     <TextBlock Text="DEPLOYMENT ZONE" FontSize="10" FontWeight="SemiBold"
                                                Foreground="{StaticResource TextSecondary}" Margin="0,0,0,4"/>
-                                    <ComboBox x:Name="CmbZona" Style="{StaticResource ComboBoxStyle}">
-                                        <ComboBoxItem Content="ZONA_CENTRO"/>
-                                        <ComboBoxItem Content="ZONA_ESCOLAR"/>
-                                        <ComboBoxItem Content="ZONA_INDUSTRIAL"/>
-                                        <ComboBoxItem Content="ZONA_RESIDENCIAL"/>
-                                        <ComboBoxItem Content="ZONA_PARQUE"/>
-                                    </ComboBox>
+                                    <ComboBox x:Name="CmbZona" Style="{StaticResource ComboBoxStyle}"/>
+                                    <!-- Items populated from Gateway/sensors.csv at runtime -->
                                 </StackPanel>
 
                                 <StackPanel Grid.Column="1" Grid.Row="1" Margin="0,0,0,8">
