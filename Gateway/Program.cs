@@ -382,6 +382,15 @@ namespace Gateway
                                 handshakeTimer.Dispose(); // Handshake concluído, cancelar o timeout
                                 Console.WriteLine($"[SENSOR '{currentSensorId}'] registou tipos: {parts[1]}");
                                 writer.WriteLine("OK_TYPES_REGISTERED");
+
+                                // Atualiza estado na config e notifica o Servidor de que se ligou
+                                configManager?.ChangeSensorStatus(currentSensorId, "ativo");
+                                configManager?.UpdateLastSync(currentSensorId, DateTime.UtcNow);
+                                string statusConnectResponse = SendToServer($"SENSOR_STATUS {currentSensorId} ativo");
+                                if (statusConnectResponse != null)
+                                {
+                                    Console.WriteLine($"[GATEWAY] SENSOR_STATUS (ativo) enviado ao Servidor para '{currentSensorId}'. Resposta: {statusConnectResponse}");
+                                }
                                 break;
 
                             case "DATA":
@@ -415,6 +424,11 @@ namespace Gateway
                                 if (sensorAtual != null && (sensorAtual.Estado == "indisponivel" || sensorAtual.Estado == "desligado"))
                                 {
                                     configManager?.ChangeSensorStatus(currentSensorId, "ativo");
+                                    string recResponseData = SendToServer($"SENSOR_STATUS {currentSensorId} ativo");
+                                    if (recResponseData != null)
+                                    {
+                                        Console.WriteLine($"[GATEWAY] SENSOR_STATUS (ativo após inatividade/DATA) enviado para '{currentSensorId}'. Resposta: {recResponseData}");
+                                    }
                                 }
 
                                 // ── Encaminhar para o Servidor ──
@@ -432,6 +446,9 @@ namespace Gateway
                                     retryBuffer.Enqueue(validationResult.ForwardMessage);
                                     writer.WriteLine("OK");   // Sensor continua normalmente
                                 }
+
+                                // Atualiza o last_sync sempre que é enviada uma mensagem DATA válida
+                                configManager?.UpdateLastSync(currentSensorId, DateTime.UtcNow);
                                 break;
 
                             case "HEARTBEAT":
@@ -446,6 +463,11 @@ namespace Gateway
                                 if (sensorHb != null && (sensorHb.Estado == "indisponivel" || sensorHb.Estado == "desligado"))
                                 {
                                     configManager?.ChangeSensorStatus(currentSensorId, "ativo");
+                                    string recResponseHb = SendToServer($"SENSOR_STATUS {currentSensorId} ativo");
+                                    if (recResponseHb != null)
+                                    {
+                                        Console.WriteLine($"[GATEWAY] SENSOR_STATUS (ativo após inatividade/HEARTBEAT) enviado para '{currentSensorId}'. Resposta: {recResponseHb}");
+                                    }
                                 }
                                 writer.WriteLine("OK");
                                 configManager?.UpdateLastSync(currentSensorId, DateTime.UtcNow);
