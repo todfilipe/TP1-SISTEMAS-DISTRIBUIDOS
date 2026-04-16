@@ -88,6 +88,21 @@ namespace OneHealthMonitor.Views
                 return;
             }
 
+            // Recolher tipos selecionados na UI thread antes de entrar no Task.Run
+            var selectedTypes = _typeToggles
+                .Where(tb => tb.IsChecked == true)
+                .Select(tb => tb.Content.ToString()!)
+                .ToList();
+
+            // Se nenhum tipo selecionado, selecionar todos por defeito
+            if (selectedTypes.Count == 0)
+            {
+                foreach (var tb in _typeToggles)
+                    tb.IsChecked = true;
+                selectedTypes = _typeToggles.Select(tb => tb.Content.ToString()!).ToList();
+                AppendLog("INFO: Nenhum tipo selecionado — a usar todos os tipos por defeito.", LogColor.Received);
+            }
+
             BtnConnect.IsEnabled = false;
             BtnConnect.Content = "CONNECTING...";
 
@@ -108,19 +123,55 @@ namespace OneHealthMonitor.Views
                     _sensor.ConnectTcp();
                     string resp = _sensor.SendConnect();
 
-                    Application.Current.Dispatcher.Invoke(() =>
+                    if (!_sensor.IsConnected)
                     {
-                        if (_sensor.IsConnected)
-                        {
-                            UpdateConnectionStatus("CONNECTED", "#FFC107");
-                            BtnRegisterTypes.IsEnabled = true;
-                            BtnConnect.Content = "CONNECTED ✓";
-                        }
-                        else
+                        Application.Current.Dispatcher.Invoke(() =>
                         {
                             UpdateConnectionStatus("FAILED", "#EF5350");
                             BtnConnect.IsEnabled = true;
                             BtnConnect.Content = "CONNECT TO GATEWAY";
+                        });
+                        return;
+                    }
+
+                    // Enviar REGISTER_TYPES imediatamente após CONNECT para não
+                    // exceder o timeout de handshake (10s) do Gateway.
+                    Application.Current.Dispatcher.Invoke(() =>
+                        BtnConnect.Content = "REGISTERING...");
+
+                    string regResp = _sensor.SendRegisterTypes(selectedTypes);
+
+                    Application.Current.Dispatcher.Invoke(() =>
+                    {
+                        if (_sensor.IsOperational)
+                        {
+                            UpdateConnectionStatus($"OPERATIONAL — {_sensor.SensorId}", "#4CAF50");
+                            BtnSendData.IsEnabled = true;
+                            BtnVideoStream.IsEnabled = true;
+                            BtnDisconnect.IsEnabled = true;
+                            ChkHeartbeat.IsEnabled = true;
+                            BtnConnect.Content = "CONNECTED ✓";
+                            BtnRegisterTypes.Content = "REGISTERED ✓";
+                            BtnRegisterTypes.IsEnabled = false;
+
+                            CmbDataType.Items.Clear();
+                            foreach (var t in selectedTypes)
+                                CmbDataType.Items.Add(t);
+                            if (CmbDataType.Items.Count > 0)
+                                CmbDataType.SelectedIndex = 0;
+
+                            // Ativar heartbeat automático para evitar timeout do gateway (15s)
+                            ChkHeartbeat.IsChecked = true;
+                            _sensor.StartHeartbeatAuto();
+                            AppendLog("INFO: Auto-Heartbeat ativado (5s) — sensor mantém-se ativo.", LogColor.Received);
+                        }
+                        else
+                        {
+                            string detail = regResp == "ERR_TYPE_NOT_SUPPORTED"
+                                ? $"ERR: Tipo não permitido para este sensor no sensors.csv. Verifica quais os tipos configurados e seleciona apenas esses. (Resposta: {regResp})"
+                                : $"ERR: Falha ao registar tipos: {regResp}";
+                            AppendLog(detail, LogColor.Error);
+                            ResetConnectionLocal();
                         }
                     });
                 }
@@ -333,6 +384,9 @@ namespace OneHealthMonitor.Views
             };
             paragraph.Inlines.Add(run);
             LogDoc.Blocks.Add(paragraph);
+            // Limit to 500 lines
+            while (LogDoc.Blocks.Count > 500)
+                LogDoc.Blocks.Remove(LogDoc.Blocks.FirstBlock);
             LogBox.ScrollToEnd();
         }
     }

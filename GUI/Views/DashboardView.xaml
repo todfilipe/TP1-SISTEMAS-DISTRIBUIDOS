@@ -3,125 +3,209 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              Background="{StaticResource BgApp}">
 
-    <Grid Margin="24,16">
+    <Grid Margin="16,12">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
         <!-- ═══════════════════════════════════════════ -->
-        <!--  TOP BAR                                    -->
+        <!--  ROW 0 — TOP BAR                           -->
         <!-- ═══════════════════════════════════════════ -->
-        <DockPanel Grid.Row="0" Margin="0,0,0,16">
+        <DockPanel Grid.Row="0" Margin="0,0,0,12">
             <StackPanel DockPanel.Dock="Left" Orientation="Horizontal">
-                <TextBlock Text="SYSTEM DASHBOARD" FontSize="20" FontWeight="Bold" 
+                <TextBlock Text="SYSTEM DASHBOARD" FontSize="20" FontWeight="Bold"
                            Foreground="{StaticResource TextPrimary}"/>
-                <Border x:Name="SystemBadge" Background="{StaticResource Success}" CornerRadius="10" 
+                <Border x:Name="SystemBadge" Background="{StaticResource Success}" CornerRadius="10"
                         Padding="10,4" Margin="16,0,0,0" VerticalAlignment="Center">
                     <StackPanel Orientation="Horizontal">
                         <Ellipse Width="8" Height="8" Fill="White" Margin="0,0,6,0"/>
-                        <TextBlock x:Name="SystemStatusText" Text="SYSTEM ONLINE" FontSize="11" 
+                        <TextBlock x:Name="SystemStatusText" Text="SYSTEM ONLINE" FontSize="11"
                                    FontWeight="Bold" Foreground="White"/>
                     </StackPanel>
                 </Border>
             </StackPanel>
-            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
-                <TextBlock x:Name="ClockText" Text="00:00:00" FontSize="18" FontWeight="SemiBold"
-                           Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center"/>
-            </StackPanel>
+            <TextBlock x:Name="ClockText" Text="00:00:00" FontSize="18" FontWeight="SemiBold"
+                       Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center"
+                       HorizontalAlignment="Right"/>
         </DockPanel>
 
         <!-- ═══════════════════════════════════════════ -->
-        <!--  MAIN GRID: 3 columns                      -->
+        <!--  ROW 1 — KPI CARDS (linha de 4)            -->
         <!-- ═══════════════════════════════════════════ -->
-        <Grid Grid.Row="1">
+        <UniformGrid Grid.Row="1" Columns="4" Margin="0,0,0,12">
+            <!-- KPI: Sensores Ativos -->
+            <Border Style="{StaticResource Card}" Margin="4">
+                <Grid>
+                    <StackPanel>
+                        <TextBlock Text="SENSORES ATIVOS" FontSize="10" FontWeight="SemiBold"
+                                   Foreground="{StaticResource TextSecondary}"/>
+                        <TextBlock x:Name="ActiveSensorsCount" Text="0" FontSize="36" FontWeight="Bold"
+                                   Foreground="{StaticResource Accent}" Margin="0,4,0,4"/>
+                        <TextBlock x:Name="SensorSummaryText" Text="0 online · 0 maint · 0 off"
+                                   FontSize="10" Foreground="{StaticResource TextSecondary}"/>
+                    </StackPanel>
+                    <TextBlock Text="📡" FontSize="32" Opacity="0.3" HorizontalAlignment="Right"
+                               VerticalAlignment="Top" Foreground="{StaticResource Accent}"/>
+                </Grid>
+            </Border>
+
+            <!-- KPI: Gateways Ligados -->
+            <Border Style="{StaticResource Card}" Margin="4">
+                <Grid>
+                    <StackPanel>
+                        <TextBlock Text="GATEWAYS LIGADOS" FontSize="10" FontWeight="SemiBold"
+                                   Foreground="{StaticResource TextSecondary}"/>
+                        <TextBlock x:Name="GatewayCount" Text="0" FontSize="36" FontWeight="Bold"
+                                   Foreground="{StaticResource TextPrimary}" Margin="0,4,0,4"/>
+                        <StackPanel Orientation="Horizontal">
+                            <Ellipse x:Name="GatewayDot" Width="8" Height="8" Fill="{StaticResource Danger}"
+                                     Margin="0,0,6,0" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="GatewayStatusText" Text="DISCONNECTED" FontSize="10"
+                                       Foreground="{StaticResource TextSecondary}"/>
+                        </StackPanel>
+                    </StackPanel>
+                    <TextBlock Text="🔀" FontSize="32" Opacity="0.3" HorizontalAlignment="Right"
+                               VerticalAlignment="Top" Foreground="{StaticResource Accent}"/>
+                </Grid>
+            </Border>
+
+            <!-- KPI: Mensagens Processadas -->
+            <Border Style="{StaticResource Card}" Margin="4">
+                <Grid>
+                    <StackPanel>
+                        <TextBlock Text="MENSAGENS" FontSize="10" FontWeight="SemiBold"
+                                   Foreground="{StaticResource TextSecondary}"/>
+                        <TextBlock x:Name="MessageCount" Text="0" FontSize="36" FontWeight="Bold"
+                                   Foreground="{StaticResource TextPrimary}" Margin="0,4,0,4"/>
+                        <TextBlock Text="total processadas" FontSize="10"
+                                   Foreground="{StaticResource TextSecondary}"/>
+                    </StackPanel>
+                    <TextBlock Text="📨" FontSize="32" Opacity="0.3" HorizontalAlignment="Right"
+                               VerticalAlignment="Top" Foreground="{StaticResource Accent}"/>
+                </Grid>
+            </Border>
+
+            <!-- KPI: Alertas (estados != ativo) -->
+            <Border Style="{StaticResource Card}" Margin="4">
+                <Grid>
+                    <StackPanel>
+                        <TextBlock Text="ALERTAS" FontSize="10" FontWeight="SemiBold"
+                                   Foreground="{StaticResource TextSecondary}"/>
+                        <TextBlock x:Name="AlertCount" Text="0" FontSize="36" FontWeight="Bold"
+                                   Foreground="{StaticResource Warning}" Margin="0,4,0,4"/>
+                        <TextBlock Text="sensores não ativos" FontSize="10"
+                                   Foreground="{StaticResource TextSecondary}"/>
+                    </StackPanel>
+                    <TextBlock Text="⚠" FontSize="32" Opacity="0.3" HorizontalAlignment="Right"
+                               VerticalAlignment="Top" Foreground="{StaticResource Warning}"/>
+                </Grid>
+            </Border>
+        </UniformGrid>
+
+        <!-- ═══════════════════════════════════════════ -->
+        <!--  ROW 2 — MAIN CONTENT (3 colunas)          -->
+        <!-- ═══════════════════════════════════════════ -->
+        <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="280"/>
                 <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="320"/>
+                <ColumnDefinition Width="300"/>
             </Grid.ColumnDefinitions>
 
-            <!-- ═══════ COL 1 — METRIC CARDS ═══════ -->
-            <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <!-- ═══════ COL 0 — MÉTRICAS + BUFFER ═══════ -->
+            <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled">
                 <StackPanel>
-                    <!-- Active Sensors -->
-                    <Border Style="{StaticResource Card}">
-                        <Grid>
-                            <StackPanel>
-                                <TextBlock Text="ACTIVE SENSORS" FontSize="11" FontWeight="SemiBold" 
-                                           Foreground="{StaticResource TextSecondary}" 
-                                          />
-                                <TextBlock x:Name="ActiveSensorsCount" Text="0" FontSize="36" FontWeight="Bold"
-                                           Foreground="{StaticResource Accent}" Margin="0,4,0,4"/>
-                                <TextBlock x:Name="SensorSummaryText" Text="0 ONLINE · 0 MAINTENANCE · 0 DISABLED" 
-                                           FontSize="10" Foreground="{StaticResource TextSecondary}"/>
-                            </StackPanel>
-                            <TextBlock Text="📡" FontSize="32" Opacity="0.3" HorizontalAlignment="Right" 
-                                       VerticalAlignment="Top" Foreground="{StaticResource Accent}"/>
-                        </Grid>
-                    </Border>
-
-                    <!-- Gateways -->
-                    <Border Style="{StaticResource Card}">
-                        <Grid>
-                            <StackPanel>
-                                <TextBlock Text="GATEWAYS" FontSize="11" FontWeight="SemiBold" 
-                                           Foreground="{StaticResource TextSecondary}"/>
-                                <TextBlock x:Name="GatewayCount" Text="0" FontSize="36" FontWeight="Bold"
-                                           Foreground="{StaticResource TextPrimary}" Margin="0,4,0,4"/>
-                                <StackPanel Orientation="Horizontal">
-                                    <Ellipse x:Name="GatewayDot" Width="8" Height="8" Fill="{StaticResource Danger}" 
-                                             Margin="0,0,6,0" VerticalAlignment="Center"/>
-                                    <TextBlock x:Name="GatewayStatusText" Text="GW01 — DESLIGADO" FontSize="11"
-                                               Foreground="{StaticResource Success}"/>
-                                </StackPanel>
-                            </StackPanel>
-                            <TextBlock Text="🔀" FontSize="32" Opacity="0.3" HorizontalAlignment="Right" 
-                                       VerticalAlignment="Top" Foreground="{StaticResource Accent}"/>
-                        </Grid>
-                    </Border>
-
-                    <!-- Messages Today -->
-                    <Border Style="{StaticResource Card}">
-                        <Grid>
-                            <StackPanel>
-                                <TextBlock Text="MESSAGES TODAY" FontSize="11" FontWeight="SemiBold" 
-                                           Foreground="{StaticResource TextSecondary}"/>
-                                <TextBlock x:Name="MessageCount" Text="0" FontSize="36" FontWeight="Bold"
-                                           Foreground="{StaticResource TextPrimary}" Margin="0,4,0,0"/>
-                            </StackPanel>
-                            <TextBlock Text="📨" FontSize="32" Opacity="0.3" HorizontalAlignment="Right" 
-                                       VerticalAlignment="Top" Foreground="{StaticResource Accent}"/>
-                        </Grid>
-                    </Border>
-
-                    <!-- Buffer Status -->
+                    <!-- Métricas do Servidor -->
                     <Border Style="{StaticResource Card}">
                         <StackPanel>
-                            <DockPanel>
-                                <TextBlock Text="BUFFER STATUS" FontSize="11" FontWeight="SemiBold" 
+                            <TextBlock Text="MÉTRICAS DO SERVIDOR" FontSize="11" FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextSecondary}" Margin="0,0,0,12"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+
+                                <StackPanel Grid.Column="0" Grid.Row="0" Margin="0,0,4,10">
+                                    <TextBlock Text="AVG TEMP" FontSize="9" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextSecondary}"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock x:Name="AvgTempDash" Text="--" FontSize="22" FontWeight="Bold"
+                                                   Foreground="#FF8C00"/>
+                                        <TextBlock Text=" °C" FontSize="11" Foreground="{StaticResource TextSecondary}"
+                                                   VerticalAlignment="Bottom" Margin="2,0,0,2"/>
+                                    </StackPanel>
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="1" Grid.Row="0" Margin="4,0,0,10">
+                                    <TextBlock Text="AVG PM2.5" FontSize="9" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextSecondary}"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock x:Name="AvgPmDash" Text="--" FontSize="22" FontWeight="Bold"
+                                                   Foreground="#EF5350"/>
+                                        <TextBlock Text=" µg" FontSize="11" Foreground="{StaticResource TextSecondary}"
+                                                   VerticalAlignment="Bottom" Margin="2,0,0,2"/>
+                                    </StackPanel>
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="0" Grid.Row="1" Margin="0,0,4,0">
+                                    <TextBlock Text="PICO RUÍDO" FontSize="9" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextSecondary}"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock x:Name="PeakRuidoDash" Text="--" FontSize="22" FontWeight="Bold"
+                                                   Foreground="#9C27B0"/>
+                                        <TextBlock Text=" dB" FontSize="11" Foreground="{StaticResource TextSecondary}"
+                                                   VerticalAlignment="Bottom" Margin="2,0,0,2"/>
+                                    </StackPanel>
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="1" Grid.Row="1" Margin="4,0,0,0">
+                                    <TextBlock Text="TOTAL REGISTOS" FontSize="9" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextSecondary}"/>
+                                    <TextBlock x:Name="TotalRecordsDash" Text="0" FontSize="22" FontWeight="Bold"
+                                               Foreground="{StaticResource TextPrimary}"/>
+                                </StackPanel>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Retry Buffer -->
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <DockPanel Margin="0,0,0,8">
+                                <TextBlock Text="RETRY BUFFER" FontSize="11" FontWeight="SemiBold"
                                            Foreground="{StaticResource TextSecondary}"/>
                                 <TextBlock x:Name="BufferPercent" Text="0%" FontSize="11" FontWeight="SemiBold"
-                                           Foreground="{StaticResource TextSecondary}" 
+                                           Foreground="{StaticResource TextSecondary}"
                                            HorizontalAlignment="Right"/>
                             </DockPanel>
-                            <ProgressBar x:Name="BufferBar" Style="{StaticResource BufferProgressBar}" 
-                                         Value="0" Margin="0,8,0,4"/>
-                            <TextBlock x:Name="BufferText" Text="0 QUEUED MESSAGES / 1000 CAP" 
-                                       FontSize="10" Foreground="{StaticResource TextSecondary}"/>
+                            <ProgressBar x:Name="BufferBar" Style="{StaticResource BufferProgressBar}"
+                                         Value="0" Margin="0,0,0,4"/>
+                            <TextBlock x:Name="BufferText" Text="0 QUEUED / 1000 CAP"
+                                       FontSize="10" Foreground="{StaticResource TextSecondary}"
+                                       Margin="0,0,0,10"/>
+                            <Button Content="⟳  FORÇAR RETRY AGORA" Style="{StaticResource OutlineButton}"
+                                    FontSize="11" Padding="8,6" HorizontalAlignment="Stretch"
+                                    Click="BtnForceRetry_Click"/>
                         </StackPanel>
                     </Border>
                 </StackPanel>
             </ScrollViewer>
 
-            <!-- ═══════ COL 2 — LIVE DATA FEED ═══════ -->
+            <!-- ═══════ COL 1 — LIVE DATA FEED ═══════ -->
             <Border Grid.Column="1" Style="{StaticResource Card}">
                 <DockPanel>
                     <DockPanel DockPanel.Dock="Top" Margin="0,0,0,12">
                         <TextBlock Text="LIVE DATA FEED" FontSize="13" FontWeight="SemiBold"
                                    Foreground="{StaticResource TextPrimary}"/>
-                        <Border x:Name="LiveBadge" Background="#EF5350" CornerRadius="8" 
+                        <Border x:Name="LiveBadge" Background="#EF5350" CornerRadius="8"
                                 Padding="8,3" Margin="8,0,0,0">
                             <StackPanel Orientation="Horizontal">
                                 <Ellipse x:Name="LiveDot" Width="6" Height="6" Fill="White" Margin="0,0,4,0"/>
@@ -134,6 +218,14 @@
                     <ListView x:Name="LiveFeedList" Background="Transparent" BorderThickness="0"
                               ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                               ScrollViewer.VerticalScrollBarVisibility="Auto">
+                        <ListView.ItemContainerStyle>
+                            <Style TargetType="ListViewItem">
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                <Setter Property="Background" Value="Transparent"/>
+                                <Setter Property="BorderThickness" Value="0"/>
+                                <Setter Property="Padding" Value="0,2"/>
+                            </Style>
+                        </ListView.ItemContainerStyle>
                         <ListView.ItemTemplate>
                             <DataTemplate>
                                 <Grid Margin="0,2">
@@ -154,7 +246,7 @@
                                     </Border>
 
                                     <!-- Sensor ID badge -->
-                                    <Border Grid.Column="1" Background="{StaticResource BgInput}" 
+                                    <Border Grid.Column="1" Background="{StaticResource BgInput}"
                                             CornerRadius="4" Padding="6,2" Margin="8,0">
                                         <TextBlock Text="{Binding SensorId}" FontSize="11" FontWeight="SemiBold"
                                                    Foreground="{StaticResource TextPrimary}"/>
@@ -163,7 +255,7 @@
                                     <!-- Type badge -->
                                     <Border Grid.Column="2" CornerRadius="4" Padding="6,2" Margin="0,0,8,0"
                                             Background="{Binding Tipo, Converter={StaticResource DataTypeToColorConverter}}">
-                                        <TextBlock Text="{Binding Tipo}" FontSize="10" FontWeight="Bold" 
+                                        <TextBlock Text="{Binding Tipo}" FontSize="10" FontWeight="Bold"
                                                    Foreground="White"/>
                                     </Border>
 
@@ -171,18 +263,19 @@
                                     <StackPanel Grid.Column="3" Orientation="Horizontal">
                                         <TextBlock Text="{Binding Valor}" FontSize="14" FontWeight="Bold"
                                                    Foreground="{StaticResource TextPrimary}"/>
-                                        <TextBlock Text="{Binding Unidade}" FontSize="11" 
-                                                   Foreground="{StaticResource TextSecondary}" Margin="3,3,0,0"/>
+                                        <TextBlock Text="{Binding Unidade}" FontSize="11"
+                                                   Foreground="{StaticResource TextSecondary}"
+                                                   Margin="3,3,0,0"/>
                                     </StackPanel>
 
                                     <!-- Zona -->
                                     <TextBlock Grid.Column="4" Text="{Binding Zona}" FontSize="10"
-                                               Foreground="{StaticResource TextSecondary}" 
+                                               Foreground="{StaticResource TextSecondary}"
                                                VerticalAlignment="Center" Margin="8,0"/>
 
                                     <!-- Timestamp -->
                                     <TextBlock Grid.Column="5" Text="{Binding Timestamp}" FontSize="9"
-                                               Foreground="{StaticResource TextSecondary}" 
+                                               Foreground="{StaticResource TextSecondary}"
                                                VerticalAlignment="Center" Opacity="0.7"/>
                                 </Grid>
                             </DataTemplate>
@@ -191,18 +284,19 @@
                 </DockPanel>
             </Border>
 
-            <!-- ═══════ COL 3 — SENSOR STATUS GRID ═══════ -->
+            <!-- ═══════ COL 2 — ESTADO DOS SENSORES ═══════ -->
             <Border Grid.Column="2" Style="{StaticResource Card}">
                 <DockPanel>
                     <DockPanel DockPanel.Dock="Top" Margin="0,0,0,12">
-                        <TextBlock Text="SENSOR STATUS" FontSize="13" FontWeight="SemiBold"
+                        <TextBlock Text="ESTADO DOS SENSORES" FontSize="13" FontWeight="SemiBold"
                                    Foreground="{StaticResource TextPrimary}"/>
-                        <Button Content="↺ Refresh" Style="{StaticResource OutlineButton}" 
+                        <Button Content="↺" Style="{StaticResource OutlineButton}"
                                 Padding="8,4" FontSize="10" HorizontalAlignment="Right"
                                 Click="RefreshSensors_Click"/>
                     </DockPanel>
 
-                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled">
                         <ItemsControl x:Name="SensorStatusList">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
@@ -211,20 +305,23 @@
                             </ItemsControl.ItemsPanel>
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
-                                    <Border Background="{StaticResource BgInput}" CornerRadius="6" 
+                                    <Border Background="{StaticResource BgInput}" CornerRadius="6"
                                             Padding="12,10" Margin="0,0,0,6">
                                         <StackPanel>
                                             <DockPanel>
-                                                <TextBlock Text="{Binding SensorId}" FontSize="14" FontWeight="Bold"
+                                                <TextBlock Text="{Binding SensorId}" FontSize="14"
+                                                           FontWeight="Bold"
                                                            Foreground="{StaticResource TextPrimary}"/>
-                                                <Border CornerRadius="8" Padding="8,2" HorizontalAlignment="Right"
+                                                <Border CornerRadius="8" Padding="8,2"
+                                                        HorizontalAlignment="Right"
                                                         Background="{Binding Estado, Converter={StaticResource StateToColorConverter}}">
-                                                    <TextBlock Text="{Binding Estado}" FontSize="10" FontWeight="Bold"
-                                                               Foreground="White"/>
+                                                    <TextBlock Text="{Binding Estado}" FontSize="10"
+                                                               FontWeight="Bold" Foreground="White"/>
                                                 </Border>
                                             </DockPanel>
-                                            <TextBlock Text="{Binding Zona}" FontSize="11" 
-                                                       Foreground="{StaticResource TextSecondary}" Margin="0,4,0,4"/>
+                                            <TextBlock Text="{Binding Zona}" FontSize="11"
+                                                       Foreground="{StaticResource TextSecondary}"
+                                                       Margin="0,4,0,4"/>
                                             <ItemsControl ItemsSource="{Binding TiposDados}">
                                                 <ItemsControl.ItemsPanel>
                                                     <ItemsPanelTemplate>
@@ -233,9 +330,11 @@
                                                 </ItemsControl.ItemsPanel>
                                                 <ItemsControl.ItemTemplate>
                                                     <DataTemplate>
-                                                        <Border Background="{StaticResource BgCard}" CornerRadius="4"
-                                                                Padding="6,2" Margin="0,0,4,0">
-                                                            <TextBlock Text="{Binding}" FontSize="10" FontWeight="SemiBold"
+                                                        <Border Background="{StaticResource BgCard}"
+                                                                CornerRadius="4" Padding="6,2"
+                                                                Margin="0,0,4,0">
+                                                            <TextBlock Text="{Binding}" FontSize="10"
+                                                                       FontWeight="SemiBold"
                                                                        Foreground="{StaticResource TextSecondary}"/>
                                                         </Border>
                                                     </DataTemplate>
@@ -250,22 +349,5 @@
                 </DockPanel>
             </Border>
         </Grid>
-
-        <!-- ═══════════════════════════════════════════ -->
-        <!--  BOTTOM BAR                                 -->
-        <!-- ═══════════════════════════════════════════ -->
-        <Border Grid.Row="2" Background="{StaticResource BgCard}" CornerRadius="8" 
-                Padding="8" Margin="0,12,0,0">
-            <UniformGrid Columns="4">
-                <Button Content="⊕  CONNECT SENSOR" Style="{StaticResource PrimaryButton}" 
-                        Margin="4,0" Click="BtnConnectSensor_Click"/>
-                <Button Content="📊  SEND DATA" Style="{StaticResource OutlineButton}" 
-                        Margin="4,0" Click="BtnSendData_Click"/>
-                <Button Content="⚡  HEARTBEAT ALL" Style="{StaticResource OutlineButton}" 
-                        Margin="4,0" Click="BtnHeartbeat_Click"/>
-                <Button Content="⛔  EMERGENCY STOP" Style="{StaticResource DangerButton}" 
-                        Margin="4,0" Click="BtnEmergencyStop_Click"/>
-            </UniformGrid>
-        </Border>
     </Grid>
 </UserControl>

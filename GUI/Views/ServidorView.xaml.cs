@@ -1,12 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Threading;
+using Microsoft.Win32;
 using OneHealthMonitor.Core;
 
 namespace OneHealthMonitor.Views
@@ -39,13 +41,16 @@ namespace OneHealthMonitor.Views
                 });
             };
 
-            // Refresh timer — every 5s
-            _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+            // Refresh timer — every 2s
+            _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
             _refreshTimer.Tick += (_, _) => RefreshAll();
             _refreshTimer.Start();
 
             // Initial port display
             PortHeader.Text = "9090";
+
+            // Refresh imediatamente ao carregar a view
+            Loaded += (_, _) => RefreshAll();
         }
 
         private void BtnStartStop_Click(object sender, RoutedEventArgs e)
@@ -84,6 +89,7 @@ namespace OneHealthMonitor.Views
             RefreshSensorStatus();
             RefreshFiles();
             RefreshStats();
+            LoadFilteredData(); // atualizar grid de dados automaticamente
         }
 
         private void RefreshGateways()
@@ -107,13 +113,29 @@ namespace OneHealthMonitor.Views
         {
             try
             {
-                var statuses = _main.ServidorService.Store.GetSensorStatuses();
-                SensorStatusGrid.ItemsSource = statuses.Select(s => new
+                // Começar com os estados guardados no servidor (CSV)
+                var merged = _main.ServidorService.Store.GetSensorStatuses()
+                    .ToDictionary(
+                        s => s.SensorId,
+                        s => new { SensorId = s.SensorId, Estado = s.Estado, Timestamp = s.Timestamp });
+
+                // Sobrepor com estado live dos gateways ativos (mais recente e inclui "ativo")
+                foreach (var gw in _main.ActiveGateways)
                 {
-                    SensorId = s.SensorId,
-                    Estado = s.Estado,
-                    Timestamp = s.Timestamp
-                }).ToList();
+                    foreach (var sensor in gw.GetConnectedSensors())
+                    {
+                        merged[sensor.SensorId] = new
+                        {
+                            SensorId = sensor.SensorId,
+                            Estado = sensor.Estado,
+                            Timestamp = sensor.LastSync.ToString("HH:mm:ss")
+                        };
+                    }
+                }
+
+                SensorStatusGrid.ItemsSource = merged.Values
+                    .OrderBy(s => s.SensorId)
+                    .ToList();
             }
             catch { }
         }
@@ -238,6 +260,50 @@ namespace OneHealthMonitor.Views
         {
             _currentPage++;
             ShowPage();
+        }
+
+        private void BtnExportCsv_Click(object sender, RoutedEventArgs e)
+        {
+            var dlg = new SaveFileDialog
+            {
+                Filter = "CSV files|*.csv|All files|*.*",
+                FileName = $"export_{DateTime.Now:yyyyMMdd_HHmmss}.csv",
+                Title = "Exportar medições para CSV"
+            };
+
+            if (dlg.ShowDialog() != true) return;
+
+            try
+            {
+                string tipo = (CmbFilterType.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "TYPE: ALL";
+                string zona = (CmbFilterZona.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "ZONE: ALL";
+                string sensor = (CmbFilterSensor.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "SENSOR: ALL";
+
+                string? tipoFilter = tipo.Contains("ALL") ? null : tipo;
+                string? zonaFilter = zona.Contains("ALL") ? null : zona;
+                string? sensorFilter = sensor.Contains("ALL") ? null : sensor;
+
+                var data = _main.ServidorService.GetRecentData(tipoFilter, zonaFilter, sensorFilter, 10000);
+
+                var lines = new List<string> { "SensorId,Zona,Tipo,Valor,Timestamp" };
+                lines.AddRange(data.Select(d => $"{d.SensorId},{d.Zona},{d.Tipo},{d.Valor},{d.Timestamp}"));
+
+                File.WriteAllLines(dlg.FileName, lines, System.Text.Encoding.UTF8);
+
+                MessageBox.Show(
+                    $"Exportados {data.Count} registos para:\n{dlg.FileName}",
+                    "Exportação Concluída",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"Erro ao exportar: {ex.Message}",
+                    "Erro de Exportação",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
         }
 
         private void AppendServerLog(string msg)

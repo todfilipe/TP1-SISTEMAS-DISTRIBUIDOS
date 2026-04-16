@@ -98,6 +98,18 @@ namespace OneHealthMonitor.Views
                 TxtCsvPath.Text = dlg.FileName;
         }
 
+        private void BtnForceRetry_Click(object sender, RoutedEventArgs e)
+        {
+            if (Service.Buffer != null && Service.IsRunning)
+            {
+                // Stop and restart the retry loop to reset backoff to minimum interval
+                Service.Buffer.Stop();
+                Service.Buffer.Start();
+                AppendLogMessage("[BUFFER] Retry manual solicitado — backoff reiniciado.");
+            }
+            RefreshUI();
+        }
+
         private void BtnClearBuffer_Click(object sender, RoutedEventArgs e)
         {
             Service.Buffer?.Clear();

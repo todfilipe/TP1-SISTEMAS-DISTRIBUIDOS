@@ -1,5 +1,6 @@
 using System;
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
@@ -44,24 +45,14 @@ namespace OneHealthMonitor.Views
             };
             _blinkTimer.Start();
 
-            // Subscribe to global data events
+            // Subscribe to global gateway data events
             _main.OnGlobalDataReceived += item =>
             {
                 Application.Current.Dispatcher.Invoke(() =>
                 {
                     _liveItems.Insert(0, item);
-                    if (_liveItems.Count > 100)
-                        _liveItems.RemoveAt(100);
-                });
-            };
-
-            // Subscribe to servidor data events
-            _main.ServidorService.OnDataStored += (sensorId, tipo, valor, zona, ts) =>
-            {
-                Application.Current.Dispatcher.Invoke(() =>
-                {
-                    // Also ensure live feed gets updated from server-side stored events
-                    // (already handled via GatewayService.OnDataReceived in most cases)
+                    if (_liveItems.Count > 50)
+                        _liveItems.RemoveAt(50);
                 });
             };
 
@@ -82,29 +73,18 @@ namespace OneHealthMonitor.Views
                     ? (System.Windows.Media.Brush)FindResource("Success")
                     : (System.Windows.Media.Brush)FindResource("Danger");
 
-                // Gateway
-                GatewayDot.Fill = gwRunning
+                // Gateways
+                int gwActive = _main.ActiveGateways.Count(g => g.IsRunning);
+                GatewayCount.Text = gwActive.ToString();
+                GatewayDot.Fill = gwActive > 0
                     ? (System.Windows.Media.Brush)FindResource("Success")
                     : (System.Windows.Media.Brush)FindResource("Danger");
-                GatewayStatusText.Text = gwRunning
-                    ? $"{_main.ActiveGateways.Count(g => g.IsRunning)} GATEWAYS CONNECTED"
+                GatewayStatusText.Text = gwActive > 0
+                    ? $"{gwActive} CONNECTED"
                     : "ALL DISCONNECTED";
-                GatewayCount.Text = _main.ActiveGateways.Count(g => g.IsRunning).ToString();
 
                 // Messages
                 MessageCount.Text = _main.ActiveGateways.Sum(g => g.TotalForwards).ToString();
-
-                // Buffer
-                int bufCount = _main.ActiveGateways.Sum(g => g.BufferCount);
-                int bufMax = _main.ActiveGateways.Sum(g => g.BufferMax);
-                BufferBar.Value = bufCount;
-                BufferPercent.Text = $"{(bufMax > 0 ? (double)bufCount / bufMax * 100 : 0):F1}%";
-                BufferText.Text = $"{bufCount} QUEUED MESSAGES / {bufMax} CAP";
-
-                if (bufCount > 800)
-                    BufferBar.Foreground = (System.Windows.Media.Brush)FindResource("Warning");
-                else
-                    BufferBar.Foreground = (System.Windows.Media.Brush)FindResource("Accent");
 
                 // Sensors
                 var sensors = _main.ActiveGateways
@@ -112,55 +92,113 @@ namespace OneHealthMonitor.Views
                                    .GroupBy(s => s.SensorId)
                                    .Select(grp => grp.First())
                                    .ToList();
-                if (sensors.Count > 0)
+
+                int ativos = sensors.Count(s => s.Estado == "ativo");
+                int manut = sensors.Count(s => s.Estado == "manutencao");
+                int desativ = sensors.Count(s => s.Estado == "desativado");
+                int indisp = sensors.Count(s => s.Estado == "indisponivel");
+                int desligados = sensors.Count(s => s.Estado == "desligado");
+                int alertas = manut + desativ + indisp + desligados;
+
+                ActiveSensorsCount.Text = ativos.ToString();
+                SensorSummaryText.Text = sensors.Count > 0
+                    ? $"{ativos} online · {manut} maint · {desativ} off"
+                    : "No sensors loaded";
+
+                // Alertas (estados != ativo)
+                AlertCount.Text = alertas.ToString();
+                AlertCount.Foreground = alertas > 0
+                    ? (System.Windows.Media.Brush)FindResource("Warning")
+                    : (System.Windows.Media.Brush)FindResource("Success");
+
+                // Sensor status list
+                SensorStatusList.ItemsSource = sensors.Count > 0 ? sensors : null;
+
+                // Retry buffer
+                int bufCount = _main.ActiveGateways.Sum(g => g.BufferCount);
+                int bufMax = _main.ActiveGateways.Sum(g => g.BufferMax);
+                if (bufMax == 0) bufMax = 1000;
+                BufferBar.Value = bufCount;
+                BufferPercent.Text = $"{(double)bufCount / bufMax * 100:F1}%";
+                BufferText.Text = $"{bufCount} QUEUED / {bufMax} CAP";
+
+                BufferBar.Foreground = bufCount > 800
+                    ? (System.Windows.Media.Brush)FindResource("Warning")
+                    : (System.Windows.Media.Brush)FindResource("Accent");
+
+                // Server metrics
+                RefreshServerMetrics();
+            }
+            catch { }
+        }
+
+        private void RefreshServerMetrics()
+        {
+            try
+            {
+                // Avg TEMP
+                var tempData = _main.ServidorService.GetRecentData("TEMP", null, null, 1000);
+                if (tempData.Count > 0)
                 {
-                    int ativos = sensors.Count(s => s.Estado == "ativo");
-                    int manut = sensors.Count(s => s.Estado == "manutencao");
-                    int desativ = sensors.Count(s => s.Estado == "desativado");
-                    int indisp = sensors.Count(s => s.Estado == "indisponivel");
-
-                    ActiveSensorsCount.Text = ativos.ToString();
-                    SensorSummaryText.Text = $"{ativos} ONLINE · {manut} MAINTENANCE · {desativ} DISABLED";
-
-                    SensorStatusList.ItemsSource = sensors;
+                    var vals = tempData
+                        .Select(d => { double.TryParse(d.Valor, NumberStyles.Any, CultureInfo.InvariantCulture, out double v); return v; })
+                        .ToList();
+                    AvgTempDash.Text = vals.Average().ToString("F1");
                 }
                 else
                 {
-                    ActiveSensorsCount.Text = "0";
-                    SensorSummaryText.Text = "No sensors loaded";
-                    SensorStatusList.ItemsSource = null;
+                    AvgTempDash.Text = "--";
                 }
+
+                // Avg PM2.5
+                var pmData = _main.ServidorService.GetRecentData("PM2.5", null, null, 1000);
+                if (pmData.Count > 0)
+                {
+                    var vals = pmData
+                        .Select(d => { double.TryParse(d.Valor, NumberStyles.Any, CultureInfo.InvariantCulture, out double v); return v; })
+                        .ToList();
+                    AvgPmDash.Text = vals.Average().ToString("F1");
+                }
+                else
+                {
+                    AvgPmDash.Text = "--";
+                }
+
+                // Peak RUIDO
+                var ruidoData = _main.ServidorService.GetRecentData("RUIDO", null, null, 1000);
+                if (ruidoData.Count > 0)
+                {
+                    var vals = ruidoData
+                        .Select(d => { double.TryParse(d.Valor, NumberStyles.Any, CultureInfo.InvariantCulture, out double v); return v; })
+                        .ToList();
+                    PeakRuidoDash.Text = vals.Max().ToString("F1");
+                }
+                else
+                {
+                    PeakRuidoDash.Text = "--";
+                }
+
+                // Total records
+                var allFiles = _main.ServidorService.Store.GetDataFiles();
+                TotalRecordsDash.Text = allFiles.Sum(f => f.LineCount).ToString();
             }
             catch { }
         }
 
         private void RefreshSensors_Click(object sender, RoutedEventArgs e) => RefreshDashboard();
 
-        private void BtnConnectSensor_Click(object sender, RoutedEventArgs e)
-        {
-            // Navigate to Sensor view
-            if (_main.FindName("BtnSensor") is Button btn)
-                btn.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-        }
-
-        private void BtnSendData_Click(object sender, RoutedEventArgs e)
-        {
-            if (_main.FindName("BtnSensor") is Button btn)
-                btn.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-        }
-
-        private void BtnHeartbeat_Click(object sender, RoutedEventArgs e)
-        {
-            // Heartbeat is handled by auto-heartbeat in SensorView
-        }
-
-        private void BtnEmergencyStop_Click(object sender, RoutedEventArgs e)
+        private void BtnForceRetry_Click(object sender, RoutedEventArgs e)
         {
             foreach (var gw in _main.ActiveGateways)
             {
-                gw.Stop();
+                int count = gw.BufferCount;
+                if (count > 0 && gw.IsRunning)
+                {
+                    // The RetryBuffer runs continuously; stopping/restarting resets backoff to minimum
+                    gw.Buffer?.Stop();
+                    gw.Buffer?.Start();
+                }
             }
-            _main.ServidorService.Stop();
             RefreshDashboard();
         }
     }

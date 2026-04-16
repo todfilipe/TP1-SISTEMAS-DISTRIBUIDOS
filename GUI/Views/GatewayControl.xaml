@@ -98,9 +98,14 @@
                             <TextBlock x:Name="NextRetryText" Text="" FontSize="10"
                                        Foreground="{StaticResource TextSecondary}" HorizontalAlignment="Center" Margin="0,0,0,8"/>
 
-                            <Button Content="[ CLEAR BUFFER ]" Style="{StaticResource DangerOutlineButton}"
-                                    FontSize="11" Padding="8,4" HorizontalAlignment="Center"
-                                    Click="BtnClearBuffer_Click"/>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                <Button Content="⟳ RETRY" Style="{StaticResource OutlineButton}"
+                                        FontSize="11" Padding="8,4" Margin="0,0,4,0"
+                                        Click="BtnForceRetry_Click"/>
+                                <Button Content="✕ CLEAR" Style="{StaticResource DangerOutlineButton}"
+                                        FontSize="11" Padding="8,4"
+                                        Click="BtnClearBuffer_Click"/>
+                            </StackPanel>
                         </StackPanel>
                     </Border>
 

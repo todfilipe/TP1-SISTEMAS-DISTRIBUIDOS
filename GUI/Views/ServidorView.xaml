@@ -14,10 +14,11 @@
         <!-- ═══════════ TOP BAR ═══════════ -->
         <DockPanel Grid.Row="0" Margin="0,0,0,12">
             <StackPanel DockPanel.Dock="Left" Orientation="Horizontal">
-                <TextBlock Text="SERVIDOR — PORT " FontSize="18" FontWeight="Bold" 
-                           Foreground="{StaticResource TextPrimary}"/>
-                <TextBlock x:Name="PortHeader" Text="9090" FontSize="18" FontWeight="Bold" 
-                           Foreground="{StaticResource Accent}"/>
+                <TextBlock Text="SERVIDOR — PORT " FontSize="18" FontWeight="Bold"
+                           Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center"/>
+                <TextBox x:Name="PortHeader" Text="9090" Style="{StaticResource InputBox}"
+                         FontSize="16" FontWeight="Bold" Foreground="{StaticResource Accent}"
+                         Width="100" VerticalAlignment="Center"/>
                 <Border x:Name="SrvStatusBadge" Background="{StaticResource Danger}" CornerRadius="10"
                         Padding="10,4" Margin="16,0,0,0" VerticalAlignment="Center">
                     <StackPanel Orientation="Horizontal">
@@ -188,7 +189,7 @@
                                            Foreground="{StaticResource TextPrimary}"/>
                             </DockPanel>
 
-                            <!-- Filters -->
+                            <!-- Filters + Export -->
                             <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,12">
                                 <StackPanel Orientation="Horizontal" Margin="0,0,8,0">
                                     <ComboBox x:Name="CmbFilterType" Style="{StaticResource ComboBoxStyle}" Width="100">
@@ -219,7 +220,9 @@
                                     </ComboBox>
                                 </StackPanel>
                                 <Button Content="FILTER" Style="{StaticResource PrimaryButton}" Padding="16,8"
-                                        Click="BtnFilter_Click"/>
+                                        Click="BtnFilter_Click" Margin="0,0,8,0"/>
+                                <Button Content="⬇ EXPORTAR CSV" Style="{StaticResource OutlineButton}"
+                                        Padding="16,8" Click="BtnExportCsv_Click"/>
                             </WrapPanel>
 
                             <!-- Data Grid -->
