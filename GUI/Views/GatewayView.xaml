@@ -1,0 +1,20 @@
+<UserControl x:Class="OneHealthMonitor.Views.GatewayView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="{StaticResource BgApp}">
+
+    <Grid Margin="12">
+        <TabControl x:Name="GatewayTabs" Style="{StaticResource DarkTabControl}" 
+                    Background="Transparent" BorderThickness="0">
+            <!-- Programmatically added tabs go here -->
+            
+            <!-- The "+" Tab -->
+            <TabItem x:Name="AddTab" Header="➕ NOVO GATEWAY" Style="{StaticResource DarkTabItem}" 
+                     Selector.Selected="AddTab_Selected">
+                <Grid>
+                    <!-- Empty view for the + tab, switching immediately happens in code-behind -->
+                </Grid>
+            </TabItem>
+        </TabControl>
+    </Grid>
+</UserControl>

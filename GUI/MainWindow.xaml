@@ -1,0 +1,60 @@
+<Window x:Class="OneHealthMonitor.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="One Health Urban Monitor" 
+        Width="1280" Height="800"
+        MinWidth="1024" MinHeight="600"
+        WindowStartupLocation="CenterScreen"
+        Background="{StaticResource BgApp}">
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="200"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- ═══════════════════════════════════════════ -->
+        <!--  SIDEBAR                                    -->
+        <!-- ═══════════════════════════════════════════ -->
+        <Border Grid.Column="0" Background="{StaticResource BgSidebar}">
+            <DockPanel>
+                <!-- Logo -->
+                <StackPanel DockPanel.Dock="Top" Margin="16,20,16,24">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="⚡" FontSize="22" Foreground="{StaticResource Accent}" 
+                                   VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <StackPanel>
+                            <TextBlock Text="One Health" FontSize="15" FontWeight="Bold" 
+                                       Foreground="{StaticResource TextPrimary}"/>
+                            <TextBlock Text="Monitor" FontSize="11" 
+                                       Foreground="{StaticResource TextSecondary}" Margin="0,-2,0,0"/>
+                        </StackPanel>
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- Navigation -->
+                <StackPanel DockPanel.Dock="Top">
+                    <Button x:Name="BtnDashboard" Content="  📊  Dashboard" 
+                            Style="{StaticResource SidebarButtonActive}" Click="BtnDashboard_Click"/>
+                    <Button x:Name="BtnSensor" Content="  📡  Sensor" 
+                            Style="{StaticResource SidebarButton}" Click="BtnSensor_Click"/>
+                    <Button x:Name="BtnGateway" Content="  🔀  Gateway" 
+                            Style="{StaticResource SidebarButton}" Click="BtnGateway_Click"/>
+                    <Button x:Name="BtnServidor" Content="  🗄️  Servidor" 
+                            Style="{StaticResource SidebarButton}" Click="BtnServidor_Click"/>
+                </StackPanel>
+
+                <!-- Bottom spacer + version -->
+                <TextBlock DockPanel.Dock="Bottom" Text="v1.0 — SD TP1" 
+                           Foreground="{StaticResource TextSecondary}" FontSize="10"
+                           HorizontalAlignment="Center" Margin="0,0,0,12"/>
+                <StackPanel/>
+            </DockPanel>
+        </Border>
+
+        <!-- ═══════════════════════════════════════════ -->
+        <!--  CONTENT AREA                               -->
+        <!-- ═══════════════════════════════════════════ -->
+        <ContentControl x:Name="ContentArea" Grid.Column="1"/>
+    </Grid>
+</Window>

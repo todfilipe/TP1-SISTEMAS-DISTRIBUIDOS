@@ -1,0 +1,244 @@
+<UserControl x:Class="OneHealthMonitor.Views.SensorControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="{StaticResource BgApp}">
+
+    <Grid Margin="24,16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- TOP BAR -->
+        <StackPanel Grid.Row="0" Margin="0,0,0,12">
+            <TextBlock Text="HARDWARE INTERFACE" FontSize="11" FontWeight="SemiBold" 
+                       Foreground="{StaticResource Accent}" Margin="0,0,0,4"/>
+            <TextBlock Text="Sensor Configuration" FontSize="22" FontWeight="Bold" 
+                       Foreground="{StaticResource TextPrimary}"/>
+        </StackPanel>
+
+        <!-- MAIN CONTENT -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- ═══════ LEFT COLUMN ═══════ -->
+            <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel>
+                    <!-- Network Config Card -->
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <DockPanel Margin="0,0,0,12">
+                                <TextBlock Text="NETWORK CONFIG" FontSize="12" FontWeight="SemiBold"
+                                           Foreground="{StaticResource TextSecondary}"/>
+                                <Border Background="{StaticResource BgInput}" CornerRadius="4" Padding="8,3"
+                                        HorizontalAlignment="Right">
+                                    <TextBlock x:Name="SensorIdBadge" Text="ID: S101" FontSize="10" 
+                                               FontWeight="Bold" Foreground="{StaticResource Accent}"/>
+                                </Border>
+                            </DockPanel>
+
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+
+                                <StackPanel Grid.Column="0" Grid.Row="0" Margin="0,0,8,8">
+                                    <TextBlock Text="SENSOR ID" FontSize="10" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextSecondary}" Margin="0,0,0,4"/>
+                                    <TextBox x:Name="TxtSensorId" Text="S101" Style="{StaticResource InputBox}"/>
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="1" Grid.Row="0" Margin="0,0,0,8">
+                                    <TextBlock Text="GATEWAY IP" FontSize="10" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextSecondary}" Margin="0,0,0,4"/>
+                                    <TextBox x:Name="TxtGatewayIp" Text="127.0.0.1" Style="{StaticResource InputBox}"/>
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="0" Grid.Row="1" Margin="0,0,8,8">
+                                    <TextBlock Text="DATA PORT" FontSize="10" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextSecondary}" Margin="0,0,0,4"/>
+                                    <TextBox x:Name="TxtGatewayPort" Text="8080" Style="{StaticResource InputBox}"/>
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="1" Grid.Row="1" Margin="0,0,0,8">
+                                    <TextBlock Text="VIDEO STREAMING PORT" FontSize="10" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextSecondary}" Margin="0,0,0,4"/>
+                                    <TextBox x:Name="TxtVideoPort" Text="8081" Style="{StaticResource InputBox}"/>
+                                </StackPanel>
+                            </Grid>
+
+                            <Button x:Name="BtnConnect" Content="CONNECT TO GATEWAY" 
+                                    Style="{StaticResource PrimaryButton}" Margin="0,8,0,0"
+                                    HorizontalAlignment="Stretch" Click="BtnConnect_Click"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Register Data Types Card -->
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock Text="REGISTER DATA TYPES" FontSize="12" FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextSecondary}" Margin="0,0,0,12"/>
+                            <WrapPanel x:Name="TypesPanel">
+                                <!-- Filled programmatically -->
+                            </WrapPanel>
+                            <Button x:Name="BtnRegisterTypes" Content="REGISTER TYPES" 
+                                    Style="{StaticResource OutlineButton}" Margin="0,12,0,0"
+                                    HorizontalAlignment="Stretch" Click="BtnRegisterTypes_Click"
+                                    IsEnabled="False"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Connection Status Card -->
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock Text="CONNECTION STATUS" FontSize="12" FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextSecondary}" Margin="0,0,0,12"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                <Ellipse x:Name="ConnDot" Width="16" Height="16" Fill="{StaticResource Danger}" 
+                                         Margin="0,0,10,0"/>
+                                <TextBlock x:Name="ConnStatusText" Text="● DISCONNECTED" FontSize="16" 
+                                           FontWeight="Bold" Foreground="{StaticResource TextPrimary}"
+                                           VerticalAlignment="Center"/>
+                            </StackPanel>
+                            <DockPanel Margin="0,8,0,0">
+                                <TextBlock Text="Auto-Heartbeat:" FontSize="12" 
+                                           Foreground="{StaticResource TextSecondary}"
+                                           VerticalAlignment="Center"/>
+                                <CheckBox x:Name="ChkHeartbeat" Content="5s" Foreground="{StaticResource TextPrimary}"
+                                          HorizontalAlignment="Right" VerticalAlignment="Center"
+                                          Checked="ChkHeartbeat_Changed" Unchecked="ChkHeartbeat_Changed"
+                                          IsEnabled="False"/>
+                            </DockPanel>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- ═══════ RIGHT COLUMN ═══════ -->
+            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel>
+                    <!-- Send Measurement Card -->
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock Text="SEND MEASUREMENT" FontSize="12" FontWeight="SemiBold"
+                                       Foreground="{StaticResource Accent}" Margin="0,0,0,12"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+
+                                <StackPanel Grid.Column="0" Grid.Row="0" Margin="0,0,8,8">
+                                    <TextBlock Text="SENSOR TYPE" FontSize="10" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextSecondary}" Margin="0,0,0,4"/>
+                                    <ComboBox x:Name="CmbDataType" Style="{StaticResource ComboBoxStyle}"
+                                              SelectionChanged="CmbDataType_Changed"/>
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="1" Grid.Row="0" Margin="0,0,0,8">
+                                    <TextBlock Text="CURRENT VALUE" FontSize="10" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextSecondary}" Margin="0,0,0,4"/>
+                                    <DockPanel>
+                                        <TextBlock x:Name="TxtUnit" DockPanel.Dock="Right" Text="°C" FontSize="12"
+                                                   Foreground="{StaticResource TextSecondary}" 
+                                                   VerticalAlignment="Center" Margin="6,0,0,0"/>
+                                        <TextBox x:Name="TxtValue" Text="22.5" Style="{StaticResource InputBox}"/>
+                                    </DockPanel>
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="0" Grid.Row="1" Margin="0,0,8,8">
+                                    <TextBlock Text="DEPLOYMENT ZONE" FontSize="10" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextSecondary}" Margin="0,0,0,4"/>
+                                    <ComboBox x:Name="CmbZona" Style="{StaticResource ComboBoxStyle}">
+                                        <ComboBoxItem Content="ZONA_CENTRO"/>
+                                        <ComboBoxItem Content="ZONA_ESCOLAR"/>
+                                        <ComboBoxItem Content="ZONA_INDUSTRIAL"/>
+                                        <ComboBoxItem Content="ZONA_RESIDENCIAL"/>
+                                        <ComboBoxItem Content="ZONA_PARQUE"/>
+                                    </ComboBox>
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="1" Grid.Row="1" Margin="0,0,0,8">
+                                    <TextBlock Text="UTC TIMESTAMP" FontSize="10" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextSecondary}" Margin="0,0,0,4"/>
+                                    <TextBox x:Name="TxtTimestamp" Style="{StaticResource InputBox}" IsReadOnly="True"/>
+                                </StackPanel>
+                            </Grid>
+
+                            <Button x:Name="BtnSendData" Content="▶  SEND DATA PACKET" 
+                                    Style="{StaticResource PrimaryButton}" Margin="0,8,0,0"
+                                    HorizontalAlignment="Stretch" Click="BtnSendData_Click" IsEnabled="False"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Video Stream Card -->
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <DockPanel Margin="0,0,0,12">
+                                <TextBlock Text="VIDEO STREAM ENGINE" FontSize="12" FontWeight="SemiBold"
+                                           Foreground="{StaticResource TextSecondary}"/>
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                    <Ellipse Width="8" Height="8" Fill="{StaticResource TextSecondary}" 
+                                             Margin="0,0,4,0" VerticalAlignment="Center"/>
+                                    <TextBlock Text="IDLE" FontSize="10" Foreground="{StaticResource TextSecondary}"/>
+                                </StackPanel>
+                            </DockPanel>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                                    <TextBlock Text="FRAME BUFFER COUNT" FontSize="10" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextSecondary}" Margin="0,0,0,4"/>
+                                    <TextBox x:Name="TxtFrameCount" Text="10" Style="{StaticResource InputBox}"/>
+                                </StackPanel>
+                                <Button x:Name="BtnVideoStream" Grid.Column="1" Content="🎥  START VIDEO STREAM" 
+                                        Style="{StaticResource OutlineButton}" VerticalAlignment="Bottom"
+                                        Click="BtnVideoStream_Click" IsEnabled="False"/>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Disconnect Card -->
+                    <Border Style="{StaticResource Card}">
+                        <Button x:Name="BtnDisconnect" Content="⛔  DISCONNECT SYSTEM INTERFACE" 
+                                Style="{StaticResource DangerOutlineButton}" HorizontalAlignment="Stretch"
+                                Click="BtnDisconnect_Click" IsEnabled="False"/>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- ═══════ PROTOCOL LOG (full-width) ═══════ -->
+            <Border Grid.Row="1" Grid.ColumnSpan="2" Style="{StaticResource Card}" Margin="8,4,8,8">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" Text="📋  SYSTEM PROTOCOL LOG" FontSize="12" 
+                               FontWeight="SemiBold" Foreground="{StaticResource TextSecondary}" 
+                               Margin="0,0,0,8"/>
+                    <RichTextBox x:Name="LogBox" Style="{StaticResource LogBox}" MinHeight="140" MaxHeight="200">
+                        <FlowDocument x:Name="LogDoc"/>
+                    </RichTextBox>
+                </DockPanel>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

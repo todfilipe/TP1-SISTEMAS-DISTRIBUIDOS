@@ -1,0 +1,232 @@
+<UserControl x:Class="OneHealthMonitor.Views.GatewayControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="{StaticResource BgApp}">
+
+    <Grid Margin="24,16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- ═══════════ TOP BAR ═══════════ -->
+        <DockPanel Grid.Row="0" Margin="0,0,0,16">
+            <StackPanel DockPanel.Dock="Left" Orientation="Horizontal">
+                <TextBlock Text="ONE HEALTH" FontSize="16" FontWeight="Bold" 
+                           Foreground="{StaticResource TextPrimary}" Margin="0,0,4,0"/>
+                <TextBlock x:Name="GwIdHeader" Text="GW01" FontSize="16" FontWeight="Bold" 
+                           Foreground="{StaticResource Accent}"/>
+                <Border x:Name="GwStatusBadge" Background="{StaticResource Danger}" CornerRadius="10"
+                        Padding="10,4" Margin="16,0,0,0" VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal">
+                        <Ellipse Width="8" Height="8" Fill="White" Margin="0,0,6,0"/>
+                        <TextBlock x:Name="GwStatusText" Text="DISCONNECTED" FontSize="11" 
+                                   FontWeight="Bold" Foreground="White"/>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+            <Button x:Name="BtnStartStop" Content="▶  START GATEWAY" Style="{StaticResource PrimaryButton}"
+                    HorizontalAlignment="Right" Click="BtnStartStop_Click"/>
+        </DockPanel>
+
+        <!-- ═══════════ MAIN CONTENT ═══════════ -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="260"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="300"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- ═══════ COL 1 — CONFIG + BUFFER + HEARTBEAT ═══════ -->
+            <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel>
+                    <!-- Gateway Configuration -->
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock Text="GATEWAY CONFIGURATION" FontSize="12" FontWeight="Bold"
+                                       Foreground="{StaticResource Accent}" Margin="0,0,0,12"/>
+
+                            <TextBlock Text="GATEWAY ID" FontSize="10" FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextSecondary}" Margin="0,0,0,4"/>
+                            <TextBox x:Name="TxtGwId" Text="GW01" Style="{StaticResource InputBox}" Margin="0,0,0,8"/>
+
+                            <TextBlock Text="SERVIDOR IP" FontSize="10" FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextSecondary}" Margin="0,0,0,4"/>
+                            <TextBox x:Name="TxtServerIp" Text="127.0.0.1" Style="{StaticResource InputBox}" Margin="0,0,0,8"/>
+
+                            <TextBlock Text="SERVIDOR PORT" FontSize="10" FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextSecondary}" Margin="0,0,0,4"/>
+                            <TextBox x:Name="TxtServerPort" Text="9090" Style="{StaticResource InputBox}" Margin="0,0,0,8"/>
+
+                            <TextBlock Text="SENSOR PORT" FontSize="10" FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextSecondary}" Margin="0,0,0,4"/>
+                            <TextBox x:Name="TxtSensorPort" Text="8080" Style="{StaticResource InputBox}" Margin="0,0,0,8"/>
+
+                            <TextBlock Text="VIDEO PORT" FontSize="10" FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextSecondary}" Margin="0,0,0,4"/>
+                            <TextBox x:Name="TxtVideoPort" Text="8081" Style="{StaticResource InputBox}" Margin="0,0,0,8"/>
+
+                            <TextBlock Text="CSV PATH" FontSize="10" FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextSecondary}" Margin="0,0,0,4"/>
+                            <DockPanel>
+                                <Button DockPanel.Dock="Right" Content="📂" Style="{StaticResource OutlineButton}"
+                                        Padding="8,6" Margin="4,0,0,0" Click="BtnBrowseCsv_Click"/>
+                                <TextBox x:Name="TxtCsvPath" Style="{StaticResource InputBox}"/>
+                            </DockPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Retry Buffer -->
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock Text="RETRY BUFFER" FontSize="12" FontWeight="Bold"
+                                       Foreground="{StaticResource TextPrimary}" Margin="0,0,0,12"/>
+
+                            <!-- Circular-style display (using stacked text) -->
+                            <Border Background="{StaticResource BgInput}" CornerRadius="60" 
+                                    Width="120" Height="120" HorizontalAlignment="Center" Margin="0,0,0,12">
+                                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                                    <TextBlock x:Name="BufferCountText" Text="0" FontSize="32" FontWeight="Bold"
+                                               Foreground="{StaticResource TextPrimary}" HorizontalAlignment="Center"/>
+                                    <TextBlock Text="/ 1000 PACKETS" FontSize="9" 
+                                               Foreground="{StaticResource TextSecondary}" HorizontalAlignment="Center"/>
+                                </StackPanel>
+                            </Border>
+
+                            <TextBlock x:Name="RetryStatusText" Text="Status: Idle" FontSize="11"
+                                       Foreground="{StaticResource Accent}" HorizontalAlignment="Center" Margin="0,0,0,4"/>
+                            <TextBlock x:Name="NextRetryText" Text="" FontSize="10"
+                                       Foreground="{StaticResource TextSecondary}" HorizontalAlignment="Center" Margin="0,0,0,8"/>
+
+                            <Button Content="[ CLEAR BUFFER ]" Style="{StaticResource DangerOutlineButton}"
+                                    FontSize="11" Padding="8,4" HorizontalAlignment="Center"
+                                    Click="BtnClearBuffer_Click"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Heartbeat Monitor -->
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <DockPanel Margin="0,0,0,12">
+                                <TextBlock Text="HEARTBEAT MONITOR" FontSize="12" FontWeight="Bold"
+                                           Foreground="{StaticResource TextPrimary}"/>
+                                <CheckBox x:Name="ChkHbActive" Content="" HorizontalAlignment="Right"
+                                          Foreground="{StaticResource TextPrimary}"
+                                          IsChecked="True"/>
+                            </DockPanel>
+
+                            <DockPanel Margin="0,0,0,8">
+                                <TextBlock Text="TIMEOUT THRESHOLD" FontSize="10" FontWeight="SemiBold"
+                                           Foreground="{StaticResource TextSecondary}"/>
+                                <TextBlock x:Name="HbTimeoutText" Text="15s" FontSize="10" FontWeight="Bold"
+                                           Foreground="{StaticResource Accent}" HorizontalAlignment="Right"/>
+                            </DockPanel>
+                            <Slider x:Name="SliderTimeout" Minimum="5" Maximum="60" Value="15"
+                                    ValueChanged="SliderTimeout_Changed" Margin="0,0,0,12"/>
+
+                            <DockPanel>
+                                <TextBlock Text="CHECK INTERVAL" FontSize="10" FontWeight="SemiBold"
+                                           Foreground="{StaticResource TextSecondary}"/>
+                                <TextBlock x:Name="HbIntervalText" Text="5s" FontSize="10" FontWeight="Bold"
+                                           Foreground="{StaticResource Accent}" HorizontalAlignment="Right"/>
+                            </DockPanel>
+                            <Slider x:Name="SliderInterval" Minimum="1" Maximum="30" Value="5"
+                                    ValueChanged="SliderInterval_Changed"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- ═══════ COL 2 — SENSOR TABLE ═══════ -->
+            <Border Grid.Column="1" Style="{StaticResource Card}">
+                <DockPanel>
+                    <DockPanel DockPanel.Dock="Top" Margin="0,0,0,12">
+                        <TextBlock Text="ACTIVE SESSIONS" FontSize="13" FontWeight="SemiBold"
+                                   Foreground="{StaticResource TextPrimary}"/>
+                    </DockPanel>
+
+                    <DataGrid x:Name="SensorGrid" Style="{StaticResource DarkDataGrid}"
+                              ColumnHeaderStyle="{StaticResource DarkDataGridColumnHeader}"
+                              CellStyle="{StaticResource DarkDataGridCell}"
+                              RowStyle="{StaticResource DarkDataGridRow}">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="SENSOR ID" Binding="{Binding SensorId}" Width="80"/>
+                            <DataGridTemplateColumn Header="STATE" Width="100">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Border CornerRadius="8" Padding="6,2"
+                                                Background="{Binding Estado, Converter={StaticResource StateToColorConverter}}">
+                                            <TextBlock Text="{Binding Estado}" FontSize="10" FontWeight="Bold"
+                                                       Foreground="White" HorizontalAlignment="Center"
+                                                      />
+                                        </Border>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTextColumn Header="ZONE" Binding="{Binding Zona}" Width="*"/>
+                            <DataGridTemplateColumn Header="TYPES" Width="120">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <ItemsControl ItemsSource="{Binding TiposDados}">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <WrapPanel/>
+                                                </ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Background="{Binding Converter={StaticResource DataTypeToColorConverter}}"
+                                                            CornerRadius="4" Padding="4,1" Margin="1">
+                                                        <TextBlock Text="{Binding}" FontSize="9" FontWeight="Bold" 
+                                                                   Foreground="White"/>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTextColumn Header="LAST SYNC" Binding="{Binding LastSync, StringFormat=HH:mm:ss}" Width="80"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+            </Border>
+
+            <!-- ═══════ COL 3 — EVENT LOG ═══════ -->
+            <Border Grid.Column="2" Style="{StaticResource Card}">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" Text="EVENT LOG" FontSize="13" FontWeight="SemiBold"
+                               Foreground="{StaticResource TextPrimary}" Margin="0,0,0,8"/>
+
+                    <TabControl x:Name="LogTabs" Style="{StaticResource DarkTabControl}">
+                        <TabItem Header="ALL" Style="{StaticResource DarkTabItem}">
+                            <RichTextBox x:Name="LogAll" Style="{StaticResource LogBox}">
+                                <FlowDocument x:Name="LogAllDoc"/>
+                            </RichTextBox>
+                        </TabItem>
+                        <TabItem Header="DATA" Style="{StaticResource DarkTabItem}">
+                            <RichTextBox x:Name="LogData" Style="{StaticResource LogBox}">
+                                <FlowDocument x:Name="LogDataDoc"/>
+                            </RichTextBox>
+                        </TabItem>
+                        <TabItem Header="HEARTBEAT" Style="{StaticResource DarkTabItem}">
+                            <RichTextBox x:Name="LogHeart" Style="{StaticResource LogBox}">
+                                <FlowDocument x:Name="LogHeartDoc"/>
+                            </RichTextBox>
+                        </TabItem>
+                        <TabItem Header="STATUS" Style="{StaticResource DarkTabItem}">
+                            <RichTextBox x:Name="LogStatus" Style="{StaticResource LogBox}">
+                                <FlowDocument x:Name="LogStatusDoc"/>
+                            </RichTextBox>
+                        </TabItem>
+                        <TabItem Header="ERRORS" Style="{StaticResource DarkTabItem}">
+                            <RichTextBox x:Name="LogErrors" Style="{StaticResource LogBox}">
+                                <FlowDocument x:Name="LogErrorsDoc"/>
+                            </RichTextBox>
+                        </TabItem>
+                    </TabControl>
+                </DockPanel>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>
