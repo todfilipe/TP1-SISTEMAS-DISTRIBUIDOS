@@ -5,8 +5,10 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
-using System.Linq;
+using System.Xml.Linq;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Gateway
 {
@@ -37,6 +39,9 @@ namespace Gateway
 
         // Buffer local para retentativa de mensagens falhadas GW→Servidor
         static RetryBuffer retryBuffer;
+
+        // Fila thread-safe (Producer-Consumer) para a agregação global de leituras dos Sensores
+        static readonly ConcurrentQueue<string> leiturasPendentes = new ConcurrentQueue<string>();
 
         // Objeto de sincronização para garantir exclusão mútua na comunicação com o Servidor
         static readonly object serverLock = new object();
@@ -169,7 +174,12 @@ namespace Gateway
             videoThread.IsBackground = true;
             videoThread.Start();
 
-            // 4. Abrir Listener para os Sensores na porta 8080
+            // Inicializar Thread do Agregador (Producer-Consumer final)
+            Thread threadAgregador = new Thread(ProcessarAgregacao);
+            threadAgregador.IsBackground = true;
+            threadAgregador.Start();
+
+            // Iniciar o listener TCP para os Sensores na porta 8080
             TcpListener sensorListener = null;
             try
             {
@@ -221,6 +231,84 @@ namespace Gateway
                 }
 
                 serverClient?.Close();
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // ProcessarAgregacao: Lógica da Thread de Agregação
+        // ─────────────────────────────────────────────────────────
+
+        static void ProcessarAgregacao()
+        {
+            while (true)
+            {
+                // Agrupar a cada 15 segundos
+                Thread.Sleep(15000);
+
+                // Puxar todas as mensagens atuais da queue
+                List<string> lote = new List<string>();
+                while (leiturasPendentes.TryDequeue(out string forwardMsg))
+                {
+                    lote.Add(forwardMsg);
+                }
+
+                if (lote.Count == 0) continue;
+
+                Console.WriteLine($"\n[AGREGADOR] A processar {lote.Count} mensagens recebidas nos últimos 15s...");
+
+                // Estrutura para agrupar: Chave(Tipo|Zona) -> Lista de Valores Numéricos
+                Dictionary<string, List<double>> agregados = new Dictionary<string, List<double>>();
+
+                foreach (string msg in lote)
+                {
+                    // Formato anterior: FORWARD S101 TEMP 22.5 ZONA_CENTRO 2026-04-17T12:00:00
+                    string[] partes = msg.Split(' ');
+                    if (partes.Length < 6) continue;
+
+                    string tipo = partes[2];
+                    string valorStr = partes[3];
+                    string zona = partes[4];
+
+                    if (double.TryParse(valorStr, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double valor))
+                    {
+                        string chave = $"{tipo}|{zona}";
+                        if (!agregados.ContainsKey(chave)) agregados[chave] = new List<double>();
+                        agregados[chave].Add(valor);
+                    }
+                }
+
+                // Enviar as médias calculadas
+                string ts = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss");
+                foreach (var kvp in agregados)
+                {
+                    string[] chavePartes = kvp.Key.Split('|');
+                    string tipo = chavePartes[0];
+                    string zona = chavePartes[1];
+
+                    // Calcula a média literal da zona para este tipo
+                    double soma = 0;
+                    foreach(double v in kvp.Value) soma += v;
+                    double media = soma / kvp.Value.Count;
+
+                    string mediaStr = media.ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
+                    
+                    // Em vez de "FORWARD", constrói o pacote reduzido de agregação
+                    // FORWARD_AGGREGATED <tipo> <valor_media> <zona> <timestamp>
+                    string pacoteAgregado = $"FORWARD_AGGREGATED {tipo} {mediaStr} {zona} {ts}";
+
+                    // SendToServer garante que se o server falhar, vai parar à RetryQueue do próprio Gateway
+                    string resposta = SendToServer(pacoteAgregado);
+                    
+                    if (resposta == null || !resposta.StartsWith("OK"))
+                    {
+                        Console.WriteLine($"[AVISO] Servidor Central falhou. Agregado protegido no disco/buffer: {pacoteAgregado}");
+                        retryBuffer.Enqueue(pacoteAgregado);
+                    }
+                    else
+                    {
+                        Console.WriteLine($"[AGREGADOR] DB OK -> {pacoteAgregado}");
+                    }
+                }
             }
         }
 
@@ -525,21 +613,11 @@ namespace Gateway
                                     }
                                 }
 
-                                // ── Encaminhar para o Servidor ──
-                                // A mensagem FORWARD já foi construída pelo validador
-                                string serverResponse = SendToServer(validationResult.ForwardMessage);
+                                // ── Encaminhar para o Servidor VIA AGREGADOR ──
+                                // Em vez de ligar o socket e enviar agora, colocamos na fila de agregação
+                                leiturasPendentes.Enqueue(validationResult.ForwardMessage);
 
-                                if (serverResponse != null && serverResponse.StartsWith("OK"))
-                                {
-                                    writer.WriteLine("OK");
-                                }
-                                else
-                                {
-                                    // Envio falhou — guardar no buffer para retentativa automática
-                                    Console.WriteLine($"[AVISO] Servidor indisponível — mensagem adicionada ao buffer de retentativa: {validationResult.ForwardMessage}");
-                                    retryBuffer.Enqueue(validationResult.ForwardMessage);
-                                    writer.WriteLine("OK");   // Sensor continua normalmente
-                                }
+                                writer.WriteLine("OK");
 
                                 // Atualiza o last_sync sempre que é enviada uma mensagem DATA válida
                                 configManager?.UpdateLastSync(currentSensorId, DateTime.UtcNow);
