@@ -6,6 +6,7 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
+using OneHealth.Shared;
 using OneHealthMonitor.Core;
 
 namespace OneHealthMonitor.Views
@@ -218,8 +219,7 @@ namespace OneHealthMonitor.Views
                 }
 
                 // Total records
-                var allFiles = _main.ServidorService.Store.GetDataFiles();
-                TotalRecordsDash.Text = allFiles.Sum(f => f.LineCount).ToString();
+                TotalRecordsDash.Text = _main.ServidorService.Store.GetTotalRecords().ToString();
             }
             catch { }
         }

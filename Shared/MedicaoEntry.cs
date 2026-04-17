@@ -1,4 +1,4 @@
-namespace OneHealthMonitor.Core
+namespace OneHealth.Shared
 {
     public class MedicaoEntry
     {

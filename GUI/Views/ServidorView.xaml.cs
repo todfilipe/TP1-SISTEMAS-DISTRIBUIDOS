@@ -9,6 +9,7 @@ using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Threading;
 using Microsoft.Win32;
+using OneHealth.Shared;
 using OneHealthMonitor.Core;
 
 namespace OneHealthMonitor.Views
@@ -157,11 +158,11 @@ namespace OneHealthMonitor.Views
         {
             try
             {
-                var files = _main.ServidorService.Store.GetDataFiles();
-                FilesList.ItemsSource = files.Select(f => new
+                var counts = _main.ServidorService.Store.GetDataCounts();
+                FilesList.ItemsSource = counts.Select(c => new
                 {
-                    f.Name,
-                    Info = $"{f.LineCount} rows · {f.SizeBytes / 1024.0:F1} KB"
+                    Name = c.Tipo,
+                    Info = $"{c.Count} rows"
                 }).ToList();
             }
             catch { }
@@ -208,9 +209,7 @@ namespace OneHealthMonitor.Views
                 }
 
                 // TOTAL RECORDS
-                var allFiles = _main.ServidorService.Store.GetDataFiles();
-                int total = allFiles.Sum(f => f.LineCount);
-                TotalRecordsText.Text = total.ToString();
+                TotalRecordsText.Text = _main.ServidorService.Store.GetTotalRecords().ToString();
             }
             catch { }
         }
