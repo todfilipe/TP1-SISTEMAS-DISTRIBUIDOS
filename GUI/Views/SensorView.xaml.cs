@@ -11,6 +11,7 @@ namespace OneHealthMonitor.Views
         private readonly MainWindow _main;
         private int _sensorCounter = 1;
         private bool _isAdding;
+        private bool _isClosing;
 
         public SensorView(MainWindow main)
         {
@@ -23,7 +24,7 @@ namespace OneHealthMonitor.Views
 
         private void AddTab_Selected(object sender, RoutedEventArgs e)
         {
-            if (!AddTab.IsSelected || _isAdding) return;
+            if (!AddTab.IsSelected || _isAdding || _isClosing) return;
             _isAdding = true;
             Dispatcher.BeginInvoke(new Action(() =>
             {
@@ -51,12 +52,22 @@ namespace OneHealthMonitor.Views
             // Now wire the close-button with a reference to newTab
             newTab.Header = BuildTabHeader(title, () =>
             {
+                _isClosing = true;
+
+                // Selecionar o tab sensor anterior/seguinte antes de remover
+                int idx = SensorTabs.Items.IndexOf(newTab);
                 sensorControl.CloseAndDispose();
                 SensorTabs.Items.Remove(newTab);
 
-                // Always keep at least one sensor tab
-                if (SensorTabs.Items.Count == 1) // only '➕ NOVO SENSOR' remains
-                    AddNewSensorTab();
+                // Ir para o sensor mais próximo (não para o tab "+")
+                int sensorTabCount = SensorTabs.Items.Count - 1; // excluir AddTab
+                if (sensorTabCount > 0)
+                {
+                    int target = Math.Min(idx, sensorTabCount - 1);
+                    SensorTabs.SelectedIndex = target;
+                }
+
+                _isClosing = false;
             });
 
             SensorTabs.Items.Add(newTab);

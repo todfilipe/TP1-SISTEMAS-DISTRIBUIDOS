@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Linq;
@@ -26,27 +27,21 @@ namespace OneHealthMonitor.Views
 
             LiveFeedList.ItemsSource = _liveItems;
 
-            // Clock timer — every 1s
+            // Criar timers — iniciados/parados em Loaded/Unloaded
             _clockTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
             _clockTimer.Tick += (_, _) => ClockText.Text = DateTime.Now.ToString("HH:mm:ss");
-            _clockTimer.Start();
-            ClockText.Text = DateTime.Now.ToString("HH:mm:ss");
 
-            // Refresh timer — every 2s
             _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
             _refreshTimer.Tick += (_, _) => RefreshDashboard();
-            _refreshTimer.Start();
 
-            // Live dot blink
             _blinkTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
             _blinkTimer.Tick += (_, _) =>
             {
                 _liveDotVisible = !_liveDotVisible;
                 LiveDot.Opacity = _liveDotVisible ? 1.0 : 0.2;
             };
-            _blinkTimer.Start();
 
-            // Subscribe to global gateway data events
+            // Definir handler — subscrição gerida em Loaded/Unloaded
             _dataReceivedHandler = item =>
             {
                 Application.Current?.Dispatcher?.BeginInvoke(() =>
@@ -56,19 +51,31 @@ namespace OneHealthMonitor.Views
                         _liveItems.RemoveAt(50);
                 });
             };
-            _main.OnGlobalDataReceived += _dataReceivedHandler;
 
+            Loaded   += DashboardView_Loaded;
             Unloaded += DashboardView_Unloaded;
+        }
 
+        // Chamado sempre que a view entra na visual tree (primeira navegação + voltar ao tab)
+        private void DashboardView_Loaded(object sender, RoutedEventArgs e)
+        {
+            ClockText.Text = DateTime.Now.ToString("HH:mm:ss");
+            _clockTimer.Start();
+            _refreshTimer.Start();
+            _blinkTimer.Start();
+            // -= antes de += garante exactamente uma subscrição mesmo se Loaded disparar
+            // sem Unloaded entre meio (ex: re-layout do visual tree)
+            _main.OnGlobalDataReceived -= _dataReceivedHandler;
+            _main.OnGlobalDataReceived += _dataReceivedHandler;
             RefreshDashboard();
         }
 
+        // Chamado quando a view sai da visual tree (navegar para outro tab)
         private void DashboardView_Unloaded(object sender, RoutedEventArgs e)
         {
             _clockTimer?.Stop();
             _refreshTimer?.Stop();
             _blinkTimer?.Stop();
-
             _main.OnGlobalDataReceived -= _dataReceivedHandler;
         }
 
@@ -124,8 +131,27 @@ namespace OneHealthMonitor.Views
                     ? (System.Windows.Media.Brush)FindResource("Warning")
                     : (System.Windows.Media.Brush)FindResource("Success");
 
-                // Sensor status list
-                SensorStatusList.ItemsSource = sensors.Count > 0 ? sensors : null;
+                // Sensor status list:
+                // 1º usa sensores do gateway (config completa: zona, tipos, estado live)
+                // 2º fallback: lê sensor_status.csv do servidor (só id + estado)
+                if (sensors.Count > 0)
+                {
+                    SensorStatusList.ItemsSource = sensors;
+                }
+                else
+                {
+                    var fallback = _main.ServidorService.Store
+                        .GetSensorStatuses()
+                        .Select(s => new SensorConfig
+                        {
+                            SensorId   = s.SensorId,
+                            Estado     = s.Estado,
+                            Zona       = "",
+                            TiposDados = new List<string>()
+                        })
+                        .ToList();
+                    SensorStatusList.ItemsSource = fallback.Count > 0 ? fallback : null;
+                }
 
                 // Retry buffer
                 int bufCount = _main.ActiveGateways.Sum(g => g.BufferCount);
