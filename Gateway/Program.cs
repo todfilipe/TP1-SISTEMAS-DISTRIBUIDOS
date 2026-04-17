@@ -299,10 +299,17 @@ namespace Gateway
                     // SendToServer garante que se o server falhar, vai parar à RetryQueue do próprio Gateway
                     string resposta = SendToServer(pacoteAgregado);
                     
-                    if (resposta == null || !resposta.StartsWith("OK"))
+                    if (resposta == null)
                     {
-                        Console.WriteLine($"[AVISO] Servidor Central falhou. Agregado protegido no disco/buffer: {pacoteAgregado}");
+                        // O servidor não respondeu = Falha de ligação. Retentamos mais tarde.
+                        Console.WriteLine($"[AVISO] Servidor Central falhou a ligação. Agregado protegido no buffer/disco: {pacoteAgregado}");
                         retryBuffer.Enqueue(pacoteAgregado);
+                    }
+                    else if (!resposta.StartsWith("OK"))
+                    {
+                        // O servidor respondeu, mas rejeitou a leitura ativamente (Ex: ERR_INVALID_DATA).
+                        // Logo, a mensagem tem "lixo" ou está viciada. Temos de a DEITAR FORA!
+                        Console.WriteLine($"[Descartado] O Servidor Central vetou ativamente os dados agregados! (Resposta: {resposta})");
                     }
                     else
                     {
