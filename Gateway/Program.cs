@@ -789,6 +789,26 @@ namespace Gateway
                         }
                     }
                 }
+
+                // ── Encaminhar metadados de vídeo ao Servidor Central ──
+                string zona = configManager?.GetSensor(sensorId)?.Zona ?? "ZONA_CENTRO";
+                string ts = startTime.ToString("yyyy-MM-ddTHH:mm:ss");
+                string forwardMsg = $"FORWARD {sensorId} VIDEO {frameCount} {zona} {ts}";
+
+                string resposta = SendToServer(forwardMsg);
+                if (resposta == null)
+                {
+                    Console.WriteLine($"[VIDEO] Servidor inalcançável — mensagem colocada no buffer de retentativa: {forwardMsg}");
+                    retryBuffer?.Enqueue(forwardMsg);
+                }
+                else if (resposta.StartsWith("OK"))
+                {
+                    Console.WriteLine($"[VIDEO] Servidor aceitou dados de vídeo do sensor '{sensorId}'. Resposta: {resposta}");
+                }
+                else
+                {
+                    Console.WriteLine($"[VIDEO] Servidor rejeitou dados de vídeo do sensor '{sensorId}'. Resposta: {resposta}");
+                }
             }
             catch (Exception ex)
             {
