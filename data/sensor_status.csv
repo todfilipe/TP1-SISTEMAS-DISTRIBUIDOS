@@ -1,4 +1,4 @@
 sensor_id,estado,timestamp
-S101,indisponivel,2026-04-16T18:01:46
-S106,desligado,2026-04-16T14:37:53
-S102,desligado,2026-04-16T17:55:42
+S101,ativo,2026-04-17T10:48:05
+S102,desligado,2026-04-16T18:23:06
+S105,indisponivel,2026-04-16T15:47:52
