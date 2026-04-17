@@ -19,10 +19,13 @@ namespace Gateway
     class Program
     {
         static string gatewayId;
+        static string serverIp;
+        static int serverPort;
         static TcpClient serverClient;
         static StreamReader serverReader;
         static StreamWriter serverWriter;
         static bool isRunning = true;
+        static bool isReconnecting = false;
 
         // Gestor da configuração dos sensores (ficheiro sensors.csv)
         static SensorConfigManager configManager;
@@ -53,8 +56,8 @@ namespace Gateway
             }
 
             gatewayId = args[0];
-            string serverIp = args.Length >= 2 ? args[1] : "127.0.0.1";
-            int serverPort = args.Length >= 3 && int.TryParse(args[2], out int p) ? p : 9090;
+            serverIp = args.Length >= 2 ? args[1] : "127.0.0.1";
+            serverPort = args.Length >= 3 && int.TryParse(args[2], out int p) ? p : 9090;
             int videoPort = args.Length >= 4 && int.TryParse(args[3], out int vp) ? vp : 8081;
             int sensorPort = args.Length >= 5 && int.TryParse(args[4], out int sp) ? sp : 8080;
 
@@ -227,17 +230,106 @@ namespace Gateway
         {
             lock (serverLock)
             {
+                if (isReconnecting) return null; // Evita tentar enviar enquanto recupera ligação
+
                 try
                 {
+                    if (serverClient == null || !serverClient.Connected)
+                        throw new Exception("Socket fechada.");
+
                     serverWriter.WriteLine(message);
                     string response = serverReader.ReadLine();
+                    if (response == null) throw new Exception("Conexão fechada prematuramente pelo Servidor (EOF).");
                     return response;
                 }
                 catch (Exception ex)
                 {
                     Console.WriteLine($"[ERRO] Falha na comunicação com o Servidor: {ex.Message}");
+                    
+                    if (!isReconnecting)
+                    {
+                        isReconnecting = true;
+                        Thread reconnectThread = new Thread(ReconnectToServer);
+                        reconnectThread.IsBackground = true;
+                        reconnectThread.Start();
+                    }
+                    
                     return null;
                 }
+            }
+        }
+
+        /// <summary>
+        /// Loop de recuperação para restabelecer a ligação com o Servidor Central de forma automática (Self-Healing).
+        /// </summary>
+        static void ReconnectToServer()
+        {
+            lock (serverLock)
+            {
+                // Limpar e fechar o TcpClient, StreamReader e StreamWriter antigos.
+                serverReader?.Close();
+                serverWriter?.Close();
+                serverClient?.Close();
+            }
+
+            while (isRunning)
+            {
+                Console.WriteLine($"[GATEWAY] A tentar reconectar ao Servidor em {serverIp}:{serverPort}...");
+                try
+                {
+                    // Tentar estabelecer uma nova ligação TCP ao Servidor Central.
+                    TcpClient newClient = new TcpClient(serverIp, serverPort); 
+                    var stream = newClient.GetStream();
+                    StreamReader newReader = new StreamReader(stream, Encoding.UTF8);
+                    StreamWriter newWriter = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true, NewLine = "\n" };
+
+                    // Refazer o handshake inicial (enviar GW_CONNECT {gatewayId}).
+                    newWriter.WriteLine($"GW_CONNECT {gatewayId}");
+                    string response = newReader.ReadLine();
+                    
+                    if (response != null && response.StartsWith("OK_GW_CONNECTED"))
+                    {
+                        Console.WriteLine("[GATEWAY] Reconectado com sucesso ao Servidor Central.");
+                        
+                        lock (serverLock)
+                        {
+                            serverClient = newClient;
+                            serverReader = newReader;
+                            serverWriter = newWriter;
+                            
+                            // Ressincronização do estado dos sensores.
+                            var dicionario = configManager?.GetDicionarioParaIteracao();
+                            if (dicionario != null)
+                            {
+                                foreach (var kvp in dicionario)
+                                {
+                                    string id = kvp.Key;
+                                    string estado = kvp.Value.Estado;
+                                    if (estado != null && estado.ToLower() == "ativo")
+                                    {
+                                        serverWriter.WriteLine($"SENSOR_STATUS {id} {estado}");
+                                        serverReader.ReadLine(); // Consumir possível resposta
+                                        Thread.Sleep(20);        // Dormir ~20ms
+                                    }
+                                }
+                            }
+                            
+                            isReconnecting = false;
+                        }
+                        break; // Sai do loop de recuperação
+                    }
+                    else
+                    {
+                        newClient.Close();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[ERRO] Falha na reconexão: {ex.Message}");
+                }
+
+                // Em caso de falha (exceção ou não aceite), esperar ~5s e voltar a tentar no loop
+                Thread.Sleep(5000);
             }
         }
 

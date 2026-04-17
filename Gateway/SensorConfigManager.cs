@@ -279,6 +279,21 @@ namespace Gateway
         }
 
         // ─────────────────────────────────────────────
+        //  GetDicionarioParaIteracao — Retorna dicionário para iteração
+        // ─────────────────────────────────────────────
+
+        /// <summary>
+        /// Retorna uma cópia do dicionário de todos os sensores carregados, de forma thread-safe.
+        /// </summary>
+        public Dictionary<string, SensorConfig> GetDicionarioParaIteracao()
+        {
+            lock (_lock)
+            {
+                return _sensors.ToDictionary(entry => entry.Key, entry => entry.Value.Clone(), StringComparer.OrdinalIgnoreCase);
+            }
+        }
+
+        // ─────────────────────────────────────────────
         //  GetAllSensors — Lista todos os sensores
         // ─────────────────────────────────────────────
 
