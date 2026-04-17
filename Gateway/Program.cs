@@ -41,8 +41,8 @@ namespace Gateway
         // Objeto de sincronização para garantir exclusão mútua na comunicação com o Servidor
         static readonly object serverLock = new object();
 
-        // Lock para acesso thread-safe ao ficheiro de metadados de vídeo
-        static readonly object videoLogLock = new object();
+        // Mutex nomeado garantido para acesso thread-safe e inter-processos ao ficheiro de vídeo
+        static readonly Mutex videoLogMutex = new Mutex(false, "GatewayVideoLogMutex");
 
         // Controlo de sessões ativas por sensor_id (evita sessões duplicadas)
         static readonly HashSet<string> _activeSessions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -714,7 +714,8 @@ namespace Gateway
                 // Sempre guarda metadados, mesmo em caso de falha TCP
                 TimeSpan duracao = DateTime.UtcNow - startTime;
 
-                lock (videoLogLock)
+                videoLogMutex.WaitOne();
+                try
                 {
                     string logFile = "video_metadata.log";
                     bool escreverCabecalho = !File.Exists(logFile) || new FileInfo(logFile).Length == 0;
@@ -726,6 +727,10 @@ namespace Gateway
 
                         logWriter.WriteLine($"{sensorId},{startTime:yyyy-MM-ddTHH:mm:ss},{duracao.TotalSeconds:F2}");
                     }
+                }
+                finally
+                {
+                    videoLogMutex.ReleaseMutex();
                 }
 
                 Console.WriteLine($"[VIDEO] Metadados do sensor '{sensorId}' registados em video_metadata.log.");

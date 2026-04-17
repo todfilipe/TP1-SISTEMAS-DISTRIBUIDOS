@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Threading;
 
 namespace Gateway
 {
@@ -21,8 +22,8 @@ namespace Gateway
         // Dicionário em memória: chave = sensor_id, valor = SensorConfig
         private readonly Dictionary<string, SensorConfig> _sensors;
 
-        // Lock para garantir acesso exclusivo ao dicionário e ao ficheiro (concorrência)
-        private readonly object _lock = new object();
+        // Mutex nomeado garantido para acesso exclusivo ao dicionário e ao ficheiro (concorrência)
+        private readonly Mutex _fileMutex = new Mutex(false, "GatewayConfigMutex");
 
         /// <summary>
         /// Inicializa o gestor com o caminho do ficheiro CSV.
@@ -45,7 +46,8 @@ namespace Gateway
         /// <returns>Número de sensores carregados com sucesso.</returns>
         public int LoadConfig()
         {
-            lock (_lock)
+            _fileMutex.WaitOne();
+            try
             {
                 _sensors.Clear();
 
@@ -87,6 +89,10 @@ namespace Gateway
 
                 Console.WriteLine($"[CONFIG] Carregados {loaded} sensor(es) a partir de '{_filePath}'.");
                 return loaded;
+            }
+            finally
+            {
+                _fileMutex.ReleaseMutex();
             }
         }
 
@@ -200,7 +206,8 @@ namespace Gateway
         /// <returns>true se atualizado com sucesso; false se o sensor não existe.</returns>
         public bool UpdateLastSync(string sensorId, DateTime timestamp)
         {
-            lock (_lock)
+            _fileMutex.WaitOne();
+            try
             {
                 if (!_sensors.ContainsKey(sensorId))
                 {
@@ -214,6 +221,10 @@ namespace Gateway
                 // Persistir imediatamente no ficheiro
                 SaveToFile();
                 return true;
+            }
+            finally
+            {
+                _fileMutex.ReleaseMutex();
             }
         }
 
@@ -240,7 +251,8 @@ namespace Gateway
                 return false;
             }
 
-            lock (_lock)
+            _fileMutex.WaitOne();
+            try
             {
                 if (!_sensors.ContainsKey(sensorId))
                 {
@@ -256,6 +268,10 @@ namespace Gateway
                 SaveToFile();
                 return true;
             }
+            finally
+            {
+                _fileMutex.ReleaseMutex();
+            }
         }
 
         // ─────────────────────────────────────────────
@@ -269,12 +285,17 @@ namespace Gateway
         /// <returns>SensorConfig ou null se não encontrado.</returns>
         public SensorConfig GetSensor(string sensorId)
         {
-            lock (_lock)
+            _fileMutex.WaitOne();
+            try
             {
                 if (_sensors.TryGetValue(sensorId, out SensorConfig config))
                     return config.Clone();   // snapshot thread-safe
 
                 return null;
+            }
+            finally
+            {
+                _fileMutex.ReleaseMutex();
             }
         }
 
@@ -287,9 +308,14 @@ namespace Gateway
         /// </summary>
         public Dictionary<string, SensorConfig> GetDicionarioParaIteracao()
         {
-            lock (_lock)
+            _fileMutex.WaitOne();
+            try
             {
                 return _sensors.ToDictionary(entry => entry.Key, entry => entry.Value.Clone(), StringComparer.OrdinalIgnoreCase);
+            }
+            finally
+            {
+                _fileMutex.ReleaseMutex();
             }
         }
 
@@ -302,9 +328,14 @@ namespace Gateway
         /// </summary>
         public List<SensorConfig> GetAllSensors()
         {
-            lock (_lock)
+            _fileMutex.WaitOne();
+            try
             {
                 return _sensors.Values.Select(s => s.Clone()).ToList();
+            }
+            finally
+            {
+                _fileMutex.ReleaseMutex();
             }
         }
 
