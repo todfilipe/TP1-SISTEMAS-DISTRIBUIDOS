@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using Dapper;
+using Microsoft.Data.Sqlite;
 
 namespace Servidor
 {
@@ -16,17 +18,13 @@ namespace Servidor
     }
 
     /// <summary>
-    /// Armazena medições ambientais em ficheiros CSV separados por tipo de dado.
-    /// Cada tipo de dado (TEMP, HUM, PM2.5, etc.) tem o seu próprio ficheiro.
-    /// Thread-safe: usa locks por ficheiro para proteger escritas concorrentes.
+    /// Armazena medições ambientais e estados de sensores numa base de dados SQLite.
+    /// Thread-safe: usa WAL mode para concorrência nativa; cada operação abre a sua própria ligação.
     /// </summary>
     public class DataStore
     {
         private readonly string _dataDirectory;
-
-        // Lock por tipo de dado para escritas concorrentes seguras
-        private readonly Dictionary<string, object> _fileLocks = new();
-        private readonly object _dictLock = new(); // Protege o dicionário de locks
+        private readonly string _connectionString;
 
         // Tipos de dados válidos definidos no protocolo
         private static readonly HashSet<string> TiposValidos = new()
@@ -56,26 +54,44 @@ namespace Servidor
                 Directory.CreateDirectory(_dataDirectory);
                 Console.WriteLine($"[DataStore] Diretório de dados criado: {_dataDirectory}");
             }
+
+            string dbPath = Path.Combine(_dataDirectory, "urbano.db");
+            _connectionString = $"Data Source={dbPath}";
+
+            InicializarBaseDados();
+            Console.WriteLine($"[DataStore] Base de dados SQLite pronta: {dbPath}");
         }
 
         /// <summary>
-        /// Obtém ou cria um lock para um dado tipo de dado.
+        /// Cria as tabelas se não existirem e ativa o modo WAL para concorrência.
         /// </summary>
-        private object GetLockForType(string tipoDado)
+        private void InicializarBaseDados()
         {
-            lock (_dictLock)
-            {
-                if (!_fileLocks.ContainsKey(tipoDado))
-                {
-                    _fileLocks[tipoDado] = new object();
-                }
-                return _fileLocks[tipoDado];
-            }
+            using var conn = new SqliteConnection(_connectionString);
+            conn.Open();
+
+            conn.Execute("PRAGMA journal_mode=WAL;");
+
+            conn.Execute(@"
+                CREATE TABLE IF NOT EXISTS medicoes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    sensor_id TEXT NOT NULL,
+                    tipo_dado TEXT NOT NULL,
+                    zona TEXT NOT NULL,
+                    valor REAL NOT NULL,
+                    timestamp TEXT NOT NULL
+                );");
+
+            conn.Execute(@"
+                CREATE TABLE IF NOT EXISTS sensor_status (
+                    sensor_id TEXT PRIMARY KEY,
+                    estado TEXT NOT NULL,
+                    timestamp TEXT NOT NULL
+                );");
         }
 
         /// <summary>
-        /// Armazena uma medição ambiental no ficheiro CSV correspondente ao tipo de dado.
-        /// Formato da linha: sensor_id,zona,valor,timestamp
+        /// Armazena uma medição ambiental na tabela medicoes após validação.
         /// </summary>
         /// <returns>ResultadoArmazenamento indicando sucesso, dados inválidos ou erro de storage.</returns>
         public ResultadoArmazenamento ArmazenarMedicao(string sensorId, string tipoDado, string valor, string zona, string timestamp)
@@ -124,83 +140,57 @@ namespace Servidor
                 return ResultadoArmazenamento.DadosInvalidos;
             }
 
-            // Construir linha CSV
-            string linha = $"{sensorId},{zona},{valor},{timestamp}";
-            string filePath = Path.Combine(_dataDirectory, $"{tipoDado}.csv");
-
-            // Escrever no ficheiro com lock por tipo de dado
-            object fileLock = GetLockForType(tipoDado);
             try
             {
-                lock (fileLock)
-                {
-                    // Criar ficheiro com cabeçalho se não existir
-                    if (!File.Exists(filePath))
-                    {
-                        File.WriteAllText(filePath, "sensor_id,zona,valor,timestamp\n");
-                    }
-                    File.AppendAllText(filePath, linha + "\n");
-                }
+                using var conn = new SqliteConnection(_connectionString);
+                conn.Open();
 
-                Console.WriteLine($"[DataStore] Medição armazenada: {tipoDado} <- {linha}");
+                conn.Execute(
+                    @"INSERT INTO medicoes (sensor_id, tipo_dado, zona, valor, timestamp)
+                      VALUES (@sensorId, @tipoDado, @zona, @valor, @timestamp);",
+                    new
+                    {
+                        sensorId,
+                        tipoDado,
+                        zona,
+                        valor = valorNumerico,
+                        timestamp
+                    });
+
+                Console.WriteLine($"[DataStore] Medição armazenada: {tipoDado} <- {sensorId},{zona},{valor},{timestamp}");
                 return ResultadoArmazenamento.Sucesso;
+            }
+            catch (SqliteException ex)
+            {
+                Console.WriteLine($"[DataStore] ERRO SQLite ao armazenar medição: {ex.Message}");
+                return ResultadoArmazenamento.ErroStorage;
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[DataStore] ERRO ao escrever ficheiro {filePath}: {ex.Message}");
+                Console.WriteLine($"[DataStore] ERRO ao armazenar medição: {ex.Message}");
                 return ResultadoArmazenamento.ErroStorage;
             }
         }
 
         /// <summary>
         /// Regista uma alteração de estado de um sensor.
-        /// Substitui o estado anterior para que exista apenas uma linha por sensor no ficheiro.
+        /// INSERT OR REPLACE garante um único registo por sensor_id.
         /// </summary>
         public void RegistarEstadoSensor(string sensorId, string estado)
         {
             Console.WriteLine($"[DataStore] Estado do sensor atualizado: {sensorId} -> {estado}");
 
-            string filePath = Path.Combine(_dataDirectory, "sensor_status.csv");
-            string novaLinha = $"{sensorId},{estado},{DateTime.UtcNow:yyyy-MM-ddTHH:mm:ss}";
+            string ts = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss");
 
-            object fileLock = GetLockForType("sensor_status");
             try
             {
-                lock (fileLock)
-                {
-                    // Dicionário para guardar a última linha de cada sensor
-                    var estadosAtuais = new Dictionary<string, string>();
+                using var conn = new SqliteConnection(_connectionString);
+                conn.Open();
 
-                    // 1. Ler o ficheiro atual (se existir)
-                    if (File.Exists(filePath))
-                    {
-                        string[] linhas = File.ReadAllLines(filePath);
-                        
-                        // Começa no i=1 para ignorar o cabeçalho
-                        for (int i = 1; i < linhas.Length; i++) 
-                        {
-                            if (string.IsNullOrWhiteSpace(linhas[i])) continue;
-                            
-                            string[] partes = linhas[i].Split(',');
-                            if (partes.Length > 0)
-                            {
-                                // Guarda a linha inteira associada ao ID do sensor
-                                estadosAtuais[partes[0]] = linhas[i]; 
-                            }
-                        }
-                    }
-
-                    // 2. Atualizar ou inserir a nova linha do sensor recebido
-                    estadosAtuais[sensorId] = novaLinha;
-
-                    // 3. Montar a lista final para gravar
-                    List<string> paraGravar = new List<string>();
-                    paraGravar.Add("sensor_id,estado,timestamp"); // Volta a pôr o cabeçalho
-                    paraGravar.AddRange(estadosAtuais.Values);    // Adiciona os sensores todos
-
-                    // 4. Gravar substituindo o ficheiro antigo (WriteAllLines em vez de Append)
-                    File.WriteAllLines(filePath, paraGravar);
-                }
+                conn.Execute(
+                    @"INSERT OR REPLACE INTO sensor_status (sensor_id, estado, timestamp)
+                      VALUES (@sensorId, @estado, @timestamp);",
+                    new { sensorId, estado, timestamp = ts });
             }
             catch (Exception ex)
             {
