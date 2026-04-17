@@ -202,6 +202,9 @@ namespace Servidor
                 case "FORWARD":
                     return ProcessarForward(partes, gatewayId);
 
+                case "FORWARD_AGGREGATED":
+                    return ProcessarForwardAggregated(partes, gatewayId);
+
                 case "SENSOR_STATUS":
                     return ProcessarSensorStatus(partes, gatewayId);
 
@@ -282,6 +285,38 @@ namespace Servidor
 
             // Armazenar via DataStore (retorna enum com tipo de resultado)
             ResultadoArmazenamento resultado = _dataStore.ArmazenarMedicao(sensorId, tipoDado, valor, zona, timestamp);
+
+            switch (resultado)
+            {
+                case ResultadoArmazenamento.Sucesso:
+                    return "OK";
+                case ResultadoArmazenamento.ErroStorage:
+                    return "ERR_STORAGE_FULL";
+                default:
+                    return "ERR_INVALID_DATA";
+            }
+        }
+
+        /// <summary>
+        /// Processa FORWARD_AGGREGATED <tipo> <valor_media> <zona> <timestamp>
+        /// Valida os dados e armazena via DataStore usando um ID virtual "AGREGADOR".
+        /// </summary>
+        private string ProcessarForwardAggregated(string[] partes, string gatewayId)
+        {
+            // Validar formato: FORWARD_AGGREGATED <tipo> <valor_media> <zona> <timestamp>
+            if (partes.Length != 5)
+            {
+                Console.WriteLine($"[Servidor] FORWARD_AGGREGATED: esperados 5 campos, recebidos {partes.Length}.");
+                return "ERR_INVALID_DATA";
+            }
+
+            string tipoDado = partes[1];
+            string valor = partes[2];
+            string zona = partes[3];
+            string timestamp = partes[4];
+
+            // Armazenar usando um ID virtual que representa uma leitura agregada daquela zona
+            ResultadoArmazenamento resultado = _dataStore.ArmazenarMedicao("AGREGADO_" + gatewayId, tipoDado, valor, zona, timestamp);
 
             switch (resultado)
             {
