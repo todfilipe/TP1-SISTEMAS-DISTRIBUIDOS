@@ -5,6 +5,8 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
+using System.Linq;
+using System.Collections.Generic;
 
 namespace Gateway
 {
@@ -656,9 +658,27 @@ namespace Gateway
                     }
 
                     sensorId = parts[1];
+
+                    // 1. Validação de Registo e Estado
+                    SensorConfig config = configManager?.GetSensor(sensorId);
+                    if (config == null || string.IsNullOrWhiteSpace(config.Estado) || !config.Estado.Equals("ativo", StringComparison.OrdinalIgnoreCase))
+                    {
+                        Console.WriteLine($"[VIDEO] Conexão rejeitada para '{sensorId}': Sensor não registado ou não ativo.");
+                        writer.WriteLine("ERR_NOT_REGISTERED");
+                        return;
+                    }
+
+                    // 2. Validação de Permissão (Tipos de Dados)
+                    if (config.TiposDados == null || !config.TiposDados.Contains("VIDEO", StringComparer.OrdinalIgnoreCase))
+                    {
+                        Console.WriteLine($"[VIDEO] Conexão rejeitada para '{sensorId}': Não tem permissão para transmitir 'VIDEO'.");
+                        writer.WriteLine("ERR_INVALID_TYPE");
+                        return;
+                    }
+
                     Console.WriteLine($"[VIDEO] Stream iniciada pelo sensor '{sensorId}'.");
 
-                    // Responder com OK (confirmação no canal de vídeo)
+                    // 3. Responder com sucesso (confirmação no canal de vídeo)
                     writer.WriteLine("OK_VIDEO_STARTED");
 
                     // Reiniciar instante de início após identificação do sensor
