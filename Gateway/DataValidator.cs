@@ -40,7 +40,7 @@ namespace Gateway
         // ─────────────────────────────────────────────────────────
 
         /// <summary>Zonas geográficas válidas no sistema.</summary>
-        private static readonly HashSet<string> ZonasValidas = new HashSet<string>(StringComparer.Ordinal)
+        internal static readonly HashSet<string> ZonasValidas = new HashSet<string>(StringComparer.Ordinal)
         {
             "ZONA_CENTRO",
             "ZONA_ESCOLAR",
@@ -50,7 +50,7 @@ namespace Gateway
         };
 
         /// <summary>Tipos de dados globais reconhecidos pelo sistema.</summary>
-        private static readonly HashSet<string> TiposGlobais = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        internal static readonly HashSet<string> TiposGlobais = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "TEMP", "HUM", "AR", "RUIDO", "PM2.5", "PM10", "LUZ", "VIDEO"
         };

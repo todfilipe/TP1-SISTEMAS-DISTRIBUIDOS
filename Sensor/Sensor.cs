@@ -165,9 +165,15 @@ public class SensorClient : IDisposable
                             Console.WriteLine($"[HEARTBEAT] Resposta inesperada: {resp}");
                     }
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
-                    // Ligação perdida — parar heartbeat silenciosamente
+                    // Log da falha antes de sair — o operador deve saber que o heartbeat parou
+                    Console.WriteLine($"[HEARTBEAT] Sensor '{_sensorId}' — erro no envio: {ex.Message}. A parar heartbeat.");
+
+                    // Se foi um erro de I/O, a ligação provavelmente já não é utilizável
+                    if (ex is System.IO.IOException || ex is System.Net.Sockets.SocketException || ex is ObjectDisposedException)
+                        _connected = false;
+
                     _heartbeatRunning = false;
                 }
             }
@@ -287,7 +293,14 @@ public class SensorClient : IDisposable
             throw new InvalidOperationException("Ligação TCP não estabelecida.");
 
         string? line = _reader.ReadLine();
-        return line ?? "ERR: Ligação fechada pelo Gateway.";
+        if (line == null)
+        {
+            // EOF — servidor fechou a ligação. Marcar como desconectado para
+            // evitar que callers (ex: SendHeartbeat) continuem a usar a socket morta.
+            _connected = false;
+            return "ERR: Ligação fechada pelo Gateway.";
+        }
+        return line;
     }
 
     public void Dispose()

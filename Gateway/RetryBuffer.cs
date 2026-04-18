@@ -101,8 +101,14 @@ namespace Gateway
 
                     if (response != null && response.StartsWith("OK"))
                     {
-                        // Sucesso — remover do buffer e resetar backoff
-                        lock (_lock) { _queue.Dequeue(); }
+                        // Sucesso — remover do buffer (defensivamente: só se o topo ainda é a
+                        // mesma mensagem que acabámos de enviar, evitando remover outra coisa
+                        // caso o topo da fila tenha mudado entretanto).
+                        lock (_lock)
+                        {
+                            if (_queue.Count > 0 && _queue.Peek() == message)
+                                _queue.Dequeue();
+                        }
                         _currentRetryMs = InitialRetryMs;
                         Console.WriteLine($"[BUFFER] Mensagem reenviada com sucesso. Restam {Count} no buffer.");
 

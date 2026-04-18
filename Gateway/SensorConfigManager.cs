@@ -147,7 +147,14 @@ namespace Gateway
                 return null;
             }
 
-            // Interpretar a lista de tipos de dados
+            // Validar a zona contra o conjunto de zonas reconhecidas pelo sistema
+            if (!DataValidator.ZonasValidas.Contains(zona))
+            {
+                Console.WriteLine($"[CONFIG] AVISO: Linha {lineNumber} tem zona inválida '{zona}' (não reconhecida): {line}");
+                return null;
+            }
+
+            // Interpretar a lista de tipos de dados (filtrando os que não são reconhecidos globalmente)
             List<string> tiposDados = new List<string>();
             if (!string.IsNullOrWhiteSpace(insideBrackets))
             {
@@ -155,8 +162,16 @@ namespace Gateway
                 foreach (string t in tipos)
                 {
                     string trimmed = t.Trim();
-                    if (!string.IsNullOrEmpty(trimmed))
-                        tiposDados.Add(trimmed);
+                    if (string.IsNullOrEmpty(trimmed))
+                        continue;
+
+                    if (!DataValidator.TiposGlobais.Contains(trimmed))
+                    {
+                        Console.WriteLine($"[CONFIG] AVISO: Linha {lineNumber} — tipo '{trimmed}' não é reconhecido pelo sistema e será ignorado: {line}");
+                        continue;
+                    }
+
+                    tiposDados.Add(trimmed);
                 }
             }
 

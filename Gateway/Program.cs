@@ -263,7 +263,11 @@ namespace Gateway
                 {
                     // Formato anterior: FORWARD S101 TEMP 22.5 ZONA_CENTRO 2026-04-17T12:00:00
                     string[] partes = msg.Split(' ');
-                    if (partes.Length < 6) continue;
+                    if (partes.Length < 6)
+                    {
+                        Console.WriteLine($"[AGREGADOR] AVISO: mensagem descartada por formato inválido (esperados >=6 blocos, recebidos {partes.Length}). Mensagem raw: '{msg}'");
+                        continue;
+                    }
 
                     string tipo = partes[2];
                     string valorStr = partes[3];
