@@ -2,4 +2,6 @@ bin/
 obj/
 .vs/
 *.log
-
+*.db
+*.sqlite
+*.sqlite3

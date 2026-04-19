@@ -239,12 +239,13 @@ namespace Servidor
                 return "ERR_INVALID_DATA";
             }
 
-            // Verificar se este gateway já está conectado noutra sessão
+            // Rejeitar se este gateway já está conectado noutra sessão
             lock (_gwListLock)
             {
                 if (_gatewaysLigados.Contains(gwId))
                 {
-                    Console.WriteLine($"[Servidor] AVISO: Gateway {gwId} já está conectado. A substituir sessão anterior.");
+                    Console.WriteLine($"[Servidor] Gateway {gwId} já está conectado — ligação duplicada rejeitada.");
+                    return "ERR_ALREADY_CONNECTED";
                 }
                 _gatewaysLigados.Add(gwId);
             }
