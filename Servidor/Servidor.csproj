@@ -11,6 +11,16 @@
   <ItemGroup>
     <PackageReference Include="Dapper" Version="2.1.72" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.6" />
+    <PackageReference Include="Grpc.Tools" Version="2.62.0">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Grpc.Net.Client" Version="2.62.0" />
+    <PackageReference Include="Google.Protobuf" Version="3.26.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Protobuf Include="..\proto\analysis.proto" GrpcServices="Both" />
   </ItemGroup>
 
 </Project>

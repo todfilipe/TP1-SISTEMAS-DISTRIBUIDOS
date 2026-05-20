@@ -1,3 +1,5 @@
+using Grpc.Net.Client;
+using Analysis;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -30,6 +32,14 @@ namespace Servidor
             "ativo", "manutencao", "desativado", "indisponivel", "desligado"
         };
 
+                // gRPC Analysis Service configuration
+        private static readonly string AnalysisServiceUrl = Environment.GetEnvironmentVariable("ANALYSIS_SERVICE_URL") ?? "http://localhost:50052";
+        private static GrpcChannel? _analysisChannel;
+        private static AnalysisService.AnalysisServiceClient? _analysisClient;
+
+        private static readonly List<AnalysisResult> HistoricoAnalises = new();
+        private static readonly object HistoricoLock = new();
+
         public ServidorTCP(int porta = 9090)
         {
             _porta = porta;
@@ -41,6 +51,7 @@ namespace Servidor
         /// </summary>
         public void Iniciar()
         {
+            InicializarClienteAnalise();
             _listener = new TcpListener(IPAddress.Any, _porta);
             _listener.Start();
             _running = true;
@@ -102,13 +113,241 @@ namespace Servidor
             while (_running)
             {
                 string? input = Console.ReadLine();
-                if (input != null && input.Trim().ToLower() == "sair")
+                if (input == null) continue;
+
+                string trimmed = input.Trim();
+                if (string.IsNullOrEmpty(trimmed)) continue;
+
+                string[] parts = trimmed.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                string cmd = parts[0].ToLower();
+
+                if (cmd == "sair")
                 {
                     Console.WriteLine("[Servidor] A encerrar...");
                     _running = false;
                     _listener?.Stop();
                     break;
                 }
+                else if (cmd == "analisar")
+                {
+                    if (parts.Length >= 6)
+                    {
+                        string tipo = parts[1];
+                        string zona = parts[2];
+                        string sensorId = parts[3];
+                        string dateFrom = parts[4];
+                        string dateTo = parts[5];
+                        ExecutarAnalise(tipo, zona, sensorId, dateFrom, dateTo);
+                    }
+                    else
+                    {
+                        Console.WriteLine("\n--- Pedido de Análise Interativo ---");
+                        Console.Write("Introduza o Tipo de Sensor (ex: TEMP, HUM): ");
+                        string? tipo = Console.ReadLine()?.Trim();
+                        
+                        Console.Write("Introduza a Zona (ex: ZONA_CENTRO): ");
+                        string? zona = Console.ReadLine()?.Trim();
+
+                        Console.Write("Introduza o ID do Sensor (opcional, Enter para todos): ");
+                        string? sensorId = Console.ReadLine()?.Trim();
+
+                        Console.Write("Introduza a Data de Início (formato ISO 8601, opcional): ");
+                        string? dateFrom = Console.ReadLine()?.Trim();
+
+                        Console.Write("Introduza a Data de Fim (formato ISO 8601, opcional): ");
+                        string? dateTo = Console.ReadLine()?.Trim();
+
+                        if (string.IsNullOrEmpty(tipo) || string.IsNullOrEmpty(zona))
+                        {
+                            Console.WriteLine("[AVISO] Tipo e Zona são obrigatórios para a análise.");
+                        }
+                        else
+                        {
+                            ExecutarAnalise(tipo, zona, sensorId ?? "", dateFrom ?? "", dateTo ?? "");
+                        }
+                    }
+                }
+                else if (cmd == "prever")
+                {
+                    if (parts.Length >= 4)
+                    {
+                        string tipo = parts[1];
+                        string zona = parts[2];
+                        if (int.TryParse(parts[3], out int periodos))
+                        {
+                            ExecutarPrevisao(tipo, zona, periodos);
+                        }
+                        else
+                        {
+                            Console.WriteLine("[ERRO] Número de períodos inválido.");
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine("\n--- Pedido de Previsão Interativo ---");
+                        Console.Write("Introduza o Tipo de Sensor (ex: TEMP, HUM): ");
+                        string? tipo = Console.ReadLine()?.Trim();
+                        
+                        Console.Write("Introduza a Zona (ex: ZONA_CENTRO): ");
+                        string? zona = Console.ReadLine()?.Trim();
+
+                        Console.Write("Introduza o número de períodos a prever: ");
+                        string? periodosStr = Console.ReadLine()?.Trim();
+
+                        if (string.IsNullOrEmpty(tipo) || string.IsNullOrEmpty(zona) || !int.TryParse(periodosStr, out int periodos))
+                        {
+                            Console.WriteLine("[AVISO] Parâmetros de previsão inválidos.");
+                        }
+                        else
+                        {
+                            ExecutarPrevisao(tipo, zona, periodos);
+                        }
+                    }
+                }
+                else if (cmd == "historico")
+                {
+                    lock (HistoricoLock)
+                    {
+                        Console.WriteLine($"\n--- Histórico de Análises Realizadas ({HistoricoAnalises.Count} registos) ---");
+                        for (int i = 0; i < HistoricoAnalises.Count; i++)
+                        {
+                            var r = HistoricoAnalises[i];
+                            Console.WriteLine($"[{i + 1}] Time: {r.Timestamp} | Avg: {r.ComputedAverage:F2} | Alert: {r.AlertLevel} | Summary: {r.ResultSummary}");
+                        }
+                        Console.WriteLine("-------------------------------------------------------------------------\n");
+                    }
+                }
+                else if (cmd == "ajuda")
+                {
+                    Console.WriteLine("\n--- Comandos Disponíveis ---");
+                    Console.WriteLine("  sair       - Encerra o Servidor.");
+                    Console.WriteLine("  analisar   - Inicia análise interativa.");
+                    Console.WriteLine("  prever     - Inicia previsão interativa.");
+                    Console.WriteLine("  historico  - Mostra o histórico de análises em memória.");
+                    Console.WriteLine("  ajuda      - Mostra esta lista de comandos.");
+                    Console.WriteLine("----------------------------\n");
+                }
+                else
+                {
+                    Console.WriteLine($"[Servidor] Comando desconhecido: '{cmd}'. Escreva 'ajuda' para ver a lista de comandos.");
+                }
+            }
+        }
+
+        private static void InicializarClienteAnalise()
+        {
+            try
+            {
+                _analysisChannel = GrpcChannel.ForAddress(AnalysisServiceUrl);
+                _analysisClient = new AnalysisService.AnalysisServiceClient(_analysisChannel);
+                Console.WriteLine($"[Servidor] Cliente gRPC de Análise inicializado para: {AnalysisServiceUrl}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ERRO] Falha ao inicializar o cliente gRPC de Análise: {ex.Message}");
+            }
+        }
+
+        private void ExecutarAnalise(string tipo, string zona, string sensorId, string dateFrom, string dateTo)
+        {
+            if (_analysisClient == null)
+            {
+                Console.WriteLine("[ERRO] Cliente gRPC de Análise não está inicializado.");
+                return;
+            }
+
+            var request = new AnalysisRequest
+            {
+                Type = tipo ?? "",
+                Zone = zona ?? "",
+                SensorId = sensorId ?? "",
+                DateFrom = dateFrom ?? "",
+                DateTo = dateTo ?? ""
+            };
+
+            Console.WriteLine($"[Servidor] A enviar pedido de análise ao AnalysisService gRPC...");
+            try
+            {
+                AnalysisResult response = _analysisClient.Analyze(request);
+
+                Console.WriteLine("\n╔══════════════════════════════════════════════╗");
+                Console.WriteLine("║            RESULTADO DA ANÁLISE              ║");
+                Console.WriteLine("╠══════════════════════════════════════════════╣");
+                Console.WriteLine($"║ Média Calculada: {response.ComputedAverage,27:F2} ║");
+                Console.WriteLine($"║ Nível de Alerta: {response.AlertLevel,27} ║");
+                Console.WriteLine($"║ Timestamp:       {response.Timestamp,27} ║");
+                Console.WriteLine("╠══════════════════════════════════════════════╣");
+                Console.WriteLine($"  Sumário: {response.ResultSummary}");
+                Console.WriteLine("╚══════════════════════════════════════════════╝\n");
+
+                GuardarResultadoAnalise(response, request);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ERRO gRPC] Falha ao executar análise via gRPC: {ex.Message}");
+            }
+        }
+
+        private void ExecutarPrevisao(string tipo, string zona, int periodos)
+        {
+            if (_analysisClient == null)
+            {
+                Console.WriteLine("[ERRO] Cliente gRPC de Análise não está inicializado.");
+                return;
+            }
+
+            var request = new PredictionRequest
+            {
+                Type = tipo ?? "",
+                Zone = zona ?? "",
+                PeriodsToPredict = periodos
+            };
+
+            Console.WriteLine($"[Servidor] A enviar pedido de previsão ao AnalysisService gRPC...");
+            try
+            {
+                PredictionResult response = _analysisClient.Predict(request);
+
+                Console.WriteLine("\n╔══════════════════════════════════════════════╗");
+                Console.WriteLine("║            RESULTADO DA PREVISÃO             ║");
+                Console.WriteLine("╠══════════════════════════════════════════════╣");
+                Console.WriteLine($"║ Timestamp:       {response.Timestamp,27} ║");
+                Console.WriteLine("╠══════════════════════════════════════════════╣");
+                Console.WriteLine($"  Sumário: {response.PredictionSummary}");
+                Console.WriteLine("╚══════════════════════════════════════════════╝\n");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ERRO gRPC] Falha ao executar previsão via gRPC: {ex.Message}");
+            }
+        }
+
+        private void GuardarResultadoAnalise(AnalysisResult result, AnalysisRequest request)
+        {
+            lock (HistoricoLock)
+            {
+                HistoricoAnalises.Add(result);
+            }
+
+            try
+            {
+                string logFile = "analysis_history.log";
+                using (var writer = new StreamWriter(logFile, append: true, System.Text.Encoding.UTF8))
+                {
+                    writer.WriteLine($"=== ANALISE EFECTUADA EM {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC ===");
+                    writer.WriteLine($"Request - Tipo: {request.Type}, Zona: {request.Zone}, Sensor: {request.SensorId}, From: {request.DateFrom}, To: {request.DateTo}");
+                    writer.WriteLine($"Result  - Summary: {result.ResultSummary}");
+                    writer.WriteLine($"Result  - Average: {result.ComputedAverage:F2}");
+                    writer.WriteLine($"Result  - Alert Level: {result.AlertLevel}");
+                    writer.WriteLine($"Result  - Timestamp: {result.Timestamp}");
+                    writer.WriteLine("==================================================");
+                    writer.WriteLine();
+                }
+                Console.WriteLine($"[Servidor] Resultado da análise guardado em '{logFile}' e em memória.");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ERRO] Falha ao guardar resultado da análise no ficheiro: {ex.Message}");
             }
         }
 

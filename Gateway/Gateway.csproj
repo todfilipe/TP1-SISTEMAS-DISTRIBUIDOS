@@ -14,4 +14,18 @@
     </None>
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Grpc.Tools" Version="2.62.0">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Grpc.Net.Client" Version="2.62.0" />
+    <PackageReference Include="Google.Protobuf" Version="3.26.1" />
+    <PackageReference Include="Polly" Version="8.6.6" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Protobuf Include="..\proto\preprocessing.proto" GrpcServices="Both" />
+  </ItemGroup>
+
 </Project>

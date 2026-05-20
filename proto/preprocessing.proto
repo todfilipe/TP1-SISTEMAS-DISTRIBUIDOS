@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+option csharp_namespace = "Preprocessing";
+
+package preprocessing;
+
+service PreprocessingService {
+  rpc Normalize(RawReading) returns (NormalizedReading);
+}
+
+message RawReading {
+  string sensorId = 1;
+  string type = 2;
+  double value = 3;
+  string unit = 4;
+  string timestamp = 5;
+  string rawFormat = 6;
+}
+
+message NormalizedReading {
+  string sensorId = 1;
+  string type = 2;
+  double value = 3;
+  string unit = 4;
+  string timestamp = 5;
+  string rawFormat = 6;
+  bool isValid = 7;
+}

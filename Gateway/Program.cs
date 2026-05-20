@@ -9,6 +9,11 @@ using System.Xml.Linq;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using Grpc.Net.Client;
+using Preprocessing;
+using Polly;
+using Polly.Retry;
+using Grpc.Core;
 
 namespace Gateway
 {
@@ -49,6 +54,29 @@ namespace Gateway
         // Mutex nomeado garantido para acesso thread-safe e inter-processos ao ficheiro de vídeo
         static readonly Mutex videoLogMutex = new Mutex(false, "GatewayVideoLogMutex");
 
+        // gRPC Preprocessing configuration
+        static readonly string preprocessingUrl = Environment.GetEnvironmentVariable("PREPROCESSING_SERVICE_URL") ?? "http://localhost:50051";
+        static GrpcChannel preprocessingChannel;
+        static PreprocessingService.PreprocessingServiceClient preprocessingClient;
+
+        // Polly resilience pipeline for gRPC retries
+        static readonly ResiliencePipeline<NormalizedReading> preprocessingPipeline = 
+            new ResiliencePipelineBuilder<NormalizedReading>()
+                .AddRetry(new RetryStrategyOptions<NormalizedReading>
+                {
+                    ShouldHandle = new PredicateBuilder<NormalizedReading>()
+                        .Handle<RpcException>(ex => ex.StatusCode == StatusCode.Unavailable || 
+                                                    ex.StatusCode == StatusCode.DeadlineExceeded ||
+                                                    ex.StatusCode == StatusCode.Internal)
+                        .Handle<Exception>(),
+                    MaxRetryAttempts = 3,
+                    BackoffType = DelayBackoffType.Exponential,
+                    UseJitter = true,
+                    Delay = TimeSpan.FromSeconds(1)
+                })
+                .AddTimeout(TimeSpan.FromSeconds(5))
+                .Build();
+
         // Controlo de sessões ativas por sensor_id (evita sessões duplicadas)
         static readonly HashSet<string> _activeSessions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         static readonly object _sessionLock = new object();
@@ -69,6 +97,9 @@ namespace Gateway
             int sensorPort = args.Length >= 5 && int.TryParse(args[4], out int sp) ? sp : 8080;
 
             Console.WriteLine($"[GATEWAY] A iniciar com ID: {gatewayId}");
+
+            // Inicializar cliente gRPC
+            InitializeGrpcClients();
 
             // 1. Ligar ao Servidor
             try
@@ -587,6 +618,7 @@ namespace Gateway
                                 break;
 
                             case "DATA":
+{
                                 // ── Verificação de sequência do protocolo ──
                                 // O sensor só pode enviar DATA depois de CONNECT + REGISTER_TYPES
                                 if (state != SensorState.OPERACIONAL)
@@ -626,13 +658,35 @@ namespace Gateway
 
                                 // ── Encaminhar para o Servidor VIA AGREGADOR ──
                                 // Em vez de ligar o socket e enviar agora, colocamos na fila de agregação
-                                leiturasPendentes.Enqueue(validationResult.ForwardMessage);
+                                                                // ── Pré-Processamento gRPC ──
+                                double valorOriginal = double.Parse(parts[2], CultureInfo.InvariantCulture);
+                                var normalized = NormalizeReading(currentSensorId, parts[1], valorOriginal, "", parts[4], "");
+
+                                if (normalized == null || !normalized.IsValid)
+                                {
+                                string errCode = (normalized == null) ? "ERR_PREPROCESSING_FAILED" : "ERR_INVALID_DATA";
+                                Console.WriteLine($"[AVISO gRPC] Leitura do sensor '{currentSensorId}' rejeitada pelo gRPC Preprocessing.");
+                                writer.WriteLine(errCode);
+                                break;
+                                }
+
+                                if (Math.Abs(valorOriginal - normalized.Value) > 0.0001)
+                                {
+                                Console.WriteLine($"[GATEWAY gRPC] Valor normalizado para '{currentSensorId}': {valorOriginal} -> {normalized.Value:F2} (unidade original convertida)");
+                                }
+
+                                // Reconstruir a mensagem FORWARD com o valor normalizado
+                                string normalizedValueStr = normalized.Value.ToString("F2", CultureInfo.InvariantCulture);
+                                string normalizedForwardMsg = $"FORWARD {currentSensorId} {normalized.Type} {normalizedValueStr} {parts[3]} {normalized.Timestamp}";
+
+                                leiturasPendentes.Enqueue(normalizedForwardMsg);
 
                                 writer.WriteLine("OK");
 
                                 // Atualiza o last_sync sempre que é enviada uma mensagem DATA válida
                                 configManager?.UpdateLastSync(currentSensorId, DateTime.UtcNow);
                                 break;
+                                }
 
                             case "HEARTBEAT":
                                 // HEARTBEAT <sensor_id> — Fase 3: atualiza last_sync
@@ -844,6 +898,46 @@ namespace Gateway
 
                 Console.WriteLine($"[VIDEO] Metadados do sensor '{sensorId}' registados em video_metadata.log.");
                 client.Close();
+            }
+        }
+
+        static void InitializeGrpcClients()
+        {
+            try
+            {
+                preprocessingChannel = GrpcChannel.ForAddress(preprocessingUrl);
+                preprocessingClient = new PreprocessingService.PreprocessingServiceClient(preprocessingChannel);
+                Console.WriteLine($"[GATEWAY] Cliente gRPC de Pré-processamento inicializado para: {preprocessingUrl}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ERRO] Falha ao inicializar o cliente gRPC: {ex.Message}");
+            }
+        }
+
+        static NormalizedReading NormalizeReading(string sensorId, string type, double value, string unit, string timestamp, string rawFormat)
+        {
+            var request = new RawReading
+            {
+                SensorId = sensorId,
+                Type = type,
+                Value = value,
+                Unit = unit ?? "",
+                Timestamp = timestamp,
+                RawFormat = rawFormat ?? ""
+            };
+
+            try
+            {
+                return preprocessingPipeline.Execute(() =>
+                {
+                    return preprocessingClient.Normalize(request);
+                });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ERRO gRPC] Falha catastrófica ao normalizar leitura do sensor {sensorId} após retentativas: {ex.Message}");
+                return null;
             }
         }
     }

@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+option csharp_namespace = "Analysis";
+
+package analysis;
+
+service AnalysisService {
+  rpc Analyze(AnalysisRequest) returns (AnalysisResult);
+  rpc Predict(PredictionRequest) returns (PredictionResult);
+}
+
+message AnalysisRequest {
+  string type = 1;
+  string zone = 2;
+  string sensorId = 3;
+  string dateFrom = 4;
+  string dateTo = 5;
+}
+
+message AnalysisResult {
+  string resultSummary = 1;
+  double computedAverage = 2;
+  string alertLevel = 3;
+  string timestamp = 4;
+}
+
+message PredictionRequest {
+  string type = 1;
+  string zone = 2;
+  int32 periodsToPredict = 3;
+}
+
+message PredictionResult {
+  string predictionSummary = 1;
+  string timestamp = 2;
+}
