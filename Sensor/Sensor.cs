@@ -1,29 +1,48 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
 using System.Net.Sockets;
+using System.Text.Json;
+using System.Threading;
+using RabbitMQ.Client;
 
 namespace Sensor;
 
 /// <summary>
-/// Lógica de comunicação TCP do Sensor com o Gateway.
-/// Implementa o protocolo textual linha-a-linha (mensagens terminadas por \n).
+/// Lógica de comunicação do Sensor com o Gateway.
+/// Envia medições via RabbitMQ Pub/Sub e streams de vídeo via TCP.
+/// Suporta reconexão automática com retry backoff exponencial.
 /// </summary>
 public class SensorClient : IDisposable
 {
-    private TcpClient? _client;
-    private StreamReader? _reader;
-    private StreamWriter? _writer;
+    private IConnection? _rabbitConnection;
+    private IModel? _rabbitChannel;
+    private readonly ConnectionFactory _connectionFactory;
+    private readonly object _connectionLock = new object();
+    private volatile bool _isReconnecting = false;
 
     private readonly string _sensorId;
     private readonly string _gatewayHost;
     private readonly int _gatewayPort;
+    private string _zone;
+    private readonly string _type;
+    private readonly int _intervalSeconds;
+    private readonly string _rabbitUser;
+    private readonly string _rabbitPass;
+    private readonly string _rabbitVHost;
 
     private bool _connected;
     private bool _typesRegistered;
 
-    // Heartbeat automático em background
+    // Heartbeat automático em background (usado no modo CLI)
     private Thread? _heartbeatThread;
     private volatile bool _heartbeatRunning;
 
-    // Lock para thread-safety (heartbeat background + comandos manuais)
+    // Loop de publicação automática (usado no modo automático)
+    private Thread? _publishLoopThread;
+    private volatile bool _publishLoopRunning;
+
+    // Lock para thread-safety
     private readonly object _sendLock = new object();
 
     // Timeout para ligação e leitura (10s conforme protocolo)
@@ -35,60 +54,154 @@ public class SensorClient : IDisposable
     public bool IsTypesRegistered => _typesRegistered;
     public bool IsOperational => _connected && _typesRegistered;
 
-    public SensorClient(string sensorId, string gatewayHost, int gatewayPort = 8080)
+    /// <summary>
+    /// Construtor principal para inicialização automática via appsettings.json.
+    /// </summary>
+    public SensorClient(
+        string sensorId, 
+        string gatewayHost, 
+        int gatewayPort, 
+        string zone, 
+        string type, 
+        int intervalSeconds,
+        string rabbitUser = "admin",
+        string rabbitPass = "admin",
+        string rabbitVHost = "onehealth")
     {
         _sensorId = sensorId;
         _gatewayHost = gatewayHost;
         _gatewayPort = gatewayPort;
-    }
+        _zone = zone;
+        _type = type;
+        _intervalSeconds = intervalSeconds;
+        _rabbitUser = rabbitUser;
+        _rabbitPass = rabbitPass;
+        _rabbitVHost = rabbitVHost;
 
-    /// <summary>
-    /// Estabelece a ligação TCP com o Gateway (com timeout).
-    /// </summary>
-    public void ConnectTcp()
-    {
-        _client = new TcpClient();
-
-        // Timeout de ligação para não bloquear indefinidamente
-        var connectTask = _client.ConnectAsync(_gatewayHost, _gatewayPort);
-        if (!connectTask.Wait(TimeoutMs))
+        _connectionFactory = new ConnectionFactory()
         {
-            _client.Close();
-            throw new TimeoutException($"Timeout ao ligar ao Gateway {_gatewayHost}:{_gatewayPort} ({TimeoutMs}ms).");
-        }
-
-        // Timeout de leitura no socket
-        _client.ReceiveTimeout = TimeoutMs;
-
-        var stream = _client.GetStream();
-        _reader = new StreamReader(stream, System.Text.Encoding.UTF8);
-        _writer = new StreamWriter(stream, System.Text.Encoding.UTF8)
-        {
-            AutoFlush = true,
-            NewLine = "\n" // Protocolo define \n como terminador (não \r\n)
+            HostName = _gatewayHost,
+            Port = 5672, // Usar porto AMQP padrão do RabbitMQ
+            UserName = _rabbitUser,
+            Password = _rabbitPass,
+            VirtualHost = _rabbitVHost
         };
     }
 
     /// <summary>
-    /// Envia CONNECT e aguarda resposta OK_CONNECTED ou ERR.
+    /// Construtor compatível com a CLI interativa original.
+    /// </summary>
+    public SensorClient(string sensorId, string gatewayHost, int gatewayPort = 8080)
+        : this(sensorId, gatewayHost, gatewayPort, "ZONA_CENTRO", "TEMP", 5)
+    {
+        _zone = DiscoverZone();
+        _connectionFactory = new ConnectionFactory()
+        {
+            HostName = _gatewayHost,
+            Port = 5672,
+            UserName = _rabbitUser,
+            Password = _rabbitPass,
+            VirtualHost = _rabbitVHost
+        };
+    }
+
+    /// <summary>
+    /// Garante que a ligação e o canal do RabbitMQ estão abertos, reconectando com backoff exponencial se necessário.
+    /// </summary>
+    public bool EnsureConnection()
+    {
+        if (_rabbitConnection != null && _rabbitConnection.IsOpen && _rabbitChannel != null && _rabbitChannel.IsOpen)
+        {
+            return true;
+        }
+
+        lock (_connectionLock)
+        {
+            // Dupla verificação após lock
+            if (_rabbitConnection != null && _rabbitConnection.IsOpen && _rabbitChannel != null && _rabbitChannel.IsOpen)
+            {
+                return true;
+            }
+
+            _connected = false;
+
+            if (_isReconnecting) return false;
+            _isReconnecting = true;
+
+            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss}] [RABBITMQ] Ligação perdida ou indisponível. A iniciar tentativas de ligação...");
+
+            int delayMs = 2000; // Atraso inicial de 2 segundos
+            const int maxDelayMs = 30000; // Atraso máximo de 30 segundos
+            int attempts = 0;
+
+            while (_publishLoopRunning || _heartbeatRunning || _isReconnecting)
+            {
+                try
+                {
+                    attempts++;
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [RABBITMQ] Tentativa {attempts} de ligação ao RabbitMQ...");
+
+                    // Libertar recursos antigos
+                    try { _rabbitChannel?.Dispose(); } catch { }
+                    try { _rabbitConnection?.Dispose(); } catch { }
+
+                    _rabbitConnection = _connectionFactory.CreateConnection();
+                    _rabbitChannel = _rabbitConnection.CreateModel();
+
+                    // Declarar o exchange sensors.exchange como topic
+                    _rabbitChannel.ExchangeDeclare(
+                        exchange: "sensors.exchange",
+                        type: ExchangeType.Topic,
+                        durable: true,
+                        autoDelete: false,
+                        arguments: null
+                    );
+
+                    _connected = true;
+                    _isReconnecting = false;
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [RABBITMQ] Ligação estabelecida com sucesso na tentativa {attempts}!");
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [RABBITMQ] Falha na tentativa {attempts}: {ex.Message}");
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [RABBITMQ] A aguardar {delayMs / 1000}s antes de tentar novamente...");
+                    Thread.Sleep(delayMs);
+                    delayMs = Math.Min(delayMs * 2, maxDelayMs); // Backoff exponencial
+                }
+            }
+
+            _isReconnecting = false;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Estabelece a ligação com o Broker RabbitMQ do Gateway.
+    /// </summary>
+    public void ConnectTcp()
+    {
+        EnsureConnection();
+    }
+
+    /// <summary>
+    /// Envia CONNECT (simulado localmente se a ligação ao RabbitMQ estiver aberta).
     /// </summary>
     public string SendConnect()
     {
         lock (_sendLock)
         {
-            SendMessage($"CONNECT {_sensorId}");
-            string response = ReadResponse();
-
-            // Verificar resposta: OK_CONNECTED <sensor_id>
-            if (response == $"OK_CONNECTED {_sensorId}")
+            if (EnsureConnection())
+            {
                 _connected = true;
-
-            return response;
+                return $"OK_CONNECTED {_sensorId}";
+            }
+            return "ERR: Ligação ao RabbitMQ fechada.";
         }
     }
 
     /// <summary>
-    /// Envia REGISTER_TYPES e aguarda resposta OK_TYPES_REGISTERED ou ERR.
+    /// Envia REGISTER_TYPES (simulado localmente).
     /// </summary>
     public string SendRegisterTypes(List<string> types)
     {
@@ -97,31 +210,59 @@ public class SensorClient : IDisposable
 
         lock (_sendLock)
         {
-            string typesStr = string.Join(",", types);
-            SendMessage($"REGISTER_TYPES {typesStr}");
-            string response = ReadResponse();
-
-            if (response == "OK_TYPES_REGISTERED")
-                _typesRegistered = true;
-
-            return response;
+            _typesRegistered = true;
+            return "OK_TYPES_REGISTERED";
         }
     }
 
     /// <summary>
-    /// Envia DATA com uma medição ambiental.
-    /// Timestamp em UTC para consistência com o protocolo ISO 8601.
+    /// Envia DATA com uma medição ambiental via RabbitMQ.
     /// </summary>
     public string SendData(string tipo, string valor, string zona, string? timestamp = null)
     {
-        if (!IsOperational)
-            return "ERR: Deve completar CONNECT e REGISTER_TYPES primeiro.";
+        if (!EnsureConnection())
+            return "ERR: Canal RabbitMQ indisponível.";
 
         timestamp ??= DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss");
+
+        double valDouble = 0;
+        double.TryParse(valor, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out valDouble);
+
         lock (_sendLock)
         {
-            SendMessage($"DATA {tipo} {valor} {zona} {timestamp}");
-            return ReadResponse();
+            try
+            {
+                var msg = new SensorMessage
+                {
+                    sensorId = _sensorId,
+                    zone = zona,
+                    type = tipo,
+                    value = valDouble,
+                    unit = GetUnitForType(tipo),
+                    timestamp = timestamp,
+                    raw = $"DATA {tipo} {valor} {zona} {timestamp}"
+                };
+
+                string json = JsonSerializer.Serialize(msg);
+                var body = System.Text.Encoding.UTF8.GetBytes(json);
+
+                var properties = _rabbitChannel!.CreateBasicProperties();
+                properties.Persistent = true; // delivery_mode = 2
+
+                _rabbitChannel.BasicPublish(
+                    exchange: "sensors.exchange",
+                    routingKey: $"{zona}.{tipo}.{_sensorId}",
+                    basicProperties: properties,
+                    body: body
+                );
+
+                return "OK";
+            }
+            catch (Exception ex)
+            {
+                _connected = false; // Forçar reconexão na próxima chamada
+                return $"ERR: {ex.Message}";
+            }
         }
     }
 
@@ -130,13 +271,44 @@ public class SensorClient : IDisposable
     /// </summary>
     public string SendHeartbeat()
     {
-        if (!_connected)
-            return "ERR: Não está conectado.";
+        if (!EnsureConnection())
+            return "ERR: Canal RabbitMQ indisponível.";
 
         lock (_sendLock)
         {
-            SendMessage($"HEARTBEAT {_sensorId}");
-            return ReadResponse();
+            try
+            {
+                var msg = new SensorMessage
+                {
+                    sensorId = _sensorId,
+                    zone = _zone,
+                    type = "HEARTBEAT",
+                    value = 0,
+                    unit = "n/a",
+                    timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss"),
+                    raw = $"HEARTBEAT {_sensorId}"
+                };
+
+                string json = JsonSerializer.Serialize(msg);
+                var body = System.Text.Encoding.UTF8.GetBytes(json);
+
+                var properties = _rabbitChannel!.CreateBasicProperties();
+                properties.Persistent = true;
+
+                _rabbitChannel.BasicPublish(
+                    exchange: "sensors.exchange",
+                    routingKey: $"{_zone}.HEARTBEAT.{_sensorId}",
+                    basicProperties: properties,
+                    body: body
+                );
+
+                return "OK";
+            }
+            catch (Exception ex)
+            {
+                _connected = false;
+                return $"ERR: {ex.Message}";
+            }
         }
     }
 
@@ -150,31 +322,21 @@ public class SensorClient : IDisposable
         _heartbeatRunning = true;
         _heartbeatThread = new Thread(() =>
         {
-            while (_heartbeatRunning && _connected)
+            while (_heartbeatRunning)
             {
                 try
                 {
                     Thread.Sleep(HeartbeatIntervalMs);
-                    if (!_heartbeatRunning || !_connected) break;
+                    if (!_heartbeatRunning) break;
 
-                    lock (_sendLock)
-                    {
-                        SendMessage($"HEARTBEAT {_sensorId}");
-                        string resp = ReadResponse();
-                        if (resp != "OK")
-                            Console.WriteLine($"[HEARTBEAT] Resposta inesperada: {resp}");
-                    }
+                    string resp = SendHeartbeat();
+                    if (resp != "OK")
+                        Console.WriteLine($"[HEARTBEAT] Resposta inesperada: {resp}");
                 }
                 catch (Exception ex)
                 {
-                    // Log da falha antes de sair — o operador deve saber que o heartbeat parou
-                    Console.WriteLine($"[HEARTBEAT] Sensor '{_sensorId}' — erro no envio: {ex.Message}. A parar heartbeat.");
-
-                    // Se foi um erro de I/O, a ligação provavelmente já não é utilizável
-                    if (ex is System.IO.IOException || ex is System.Net.Sockets.SocketException || ex is ObjectDisposedException)
-                        _connected = false;
-
-                    _heartbeatRunning = false;
+                    Console.WriteLine($"[HEARTBEAT] Sensor '{_sensorId}' — erro no envio: {ex.Message}.");
+                    _connected = false;
                 }
             }
         })
@@ -191,6 +353,74 @@ public class SensorClient : IDisposable
     public void StopHeartbeatAuto()
     {
         _heartbeatRunning = false;
+    }
+
+    /// <summary>
+    /// Loop de Publicação Automática de Leituras.
+    /// </summary>
+    public void StartAutomaticPublishing()
+    {
+        if (_publishLoopRunning) return;
+
+        _publishLoopRunning = true;
+        _publishLoopThread = new Thread(() =>
+        {
+            Console.WriteLine($"╔══════════════════════════════════════════════╗");
+            Console.WriteLine($"║   SENSOR AUTOMÁTICO — ID: {_sensorId,-18} ║");
+            Console.WriteLine($"╠══════════════════════════════════════════════╣");
+            Console.WriteLine($"║   Zona:      {_zone,-31} ║");
+            Console.WriteLine($"║   Tipo:      {_type,-31} ║");
+            Console.WriteLine($"║   Intervalo: {_intervalSeconds + " segundos",-31} ║");
+            Console.WriteLine($"╚══════════════════════════════════════════════╝");
+            Console.WriteLine();
+
+            _connected = true;
+            _typesRegistered = true;
+
+            while (_publishLoopRunning)
+            {
+                try
+                {
+                    double val = GenerateSimulatedValue(_type);
+                    string valStr = val.ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
+                    string ts = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss");
+
+                    string resp = SendData(_type, valStr, _zone, ts);
+                    if (resp == "OK")
+                    {
+                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [DATA SENT] {_zone}.{_type}.{_sensorId} -> {valStr} {GetUnitForType(_type)}");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [AVISO] Falha ao enviar dados: {resp}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [ERRO NO LOOP] {ex.Message}");
+                    _connected = false;
+                }
+
+                Thread.Sleep(_intervalSeconds * 1000);
+            }
+        })
+        {
+            IsBackground = true,
+            Name = $"PublishLoop-{_sensorId}"
+        };
+        _publishLoopThread.Start();
+
+        // No modo automático, iniciamos também o heartbeat automático para manter o estado ativo no gateway
+        StartHeartbeatAuto();
+    }
+
+    /// <summary>
+    /// Para a publicação automática de leituras.
+    /// </summary>
+    public void StopAutomaticPublishing()
+    {
+        _publishLoopRunning = false;
+        StopHeartbeatAuto();
     }
 
     /// <summary>
@@ -259,73 +489,161 @@ public class SensorClient : IDisposable
     /// </summary>
     public string SendDisconnect()
     {
-        if (!_connected)
-            return "ERR: Não está conectado.";
-
+        StopAutomaticPublishing();
         StopHeartbeatAuto();
 
         lock (_sendLock)
         {
-            SendMessage($"DISCONNECT {_sensorId}");
-            string response = ReadResponse();
-
-            if (response == "OK_DISCONNECT")
+            try
             {
-                _connected = false;
-                _typesRegistered = false;
+                if (_rabbitChannel != null && _rabbitChannel.IsOpen)
+                {
+                    var msg = new SensorMessage
+                    {
+                        sensorId = _sensorId,
+                        zone = _zone,
+                        type = "DISCONNECT",
+                        value = 0,
+                        unit = "n/a",
+                        timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss"),
+                        raw = $"DISCONNECT {_sensorId}"
+                    };
+
+                    string json = JsonSerializer.Serialize(msg);
+                    var body = System.Text.Encoding.UTF8.GetBytes(json);
+
+                    var properties = _rabbitChannel.CreateBasicProperties();
+                    properties.Persistent = true;
+
+                    _rabbitChannel.BasicPublish(
+                        exchange: "sensors.exchange",
+                        routingKey: $"{_zone}.DISCONNECT.{_sensorId}",
+                        basicProperties: properties,
+                        body: body
+                    );
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ERRO DISCONNECT] Falha ao publicar disconnect: {ex.Message}");
             }
 
-            return response;
-        }
-    }
-
-    private void SendMessage(string message)
-    {
-        if (_writer == null)
-            throw new InvalidOperationException("Ligação TCP não estabelecida.");
-
-        _writer.WriteLine(message);
-    }
-
-    private string ReadResponse()
-    {
-        if (_reader == null)
-            throw new InvalidOperationException("Ligação TCP não estabelecida.");
-
-        string? line = _reader.ReadLine();
-        if (line == null)
-        {
-            // EOF — servidor fechou a ligação. Marcar como desconectado para
-            // evitar que callers (ex: SendHeartbeat) continuem a usar a socket morta.
             _connected = false;
-            return "ERR: Ligação fechada pelo Gateway.";
+            _typesRegistered = false;
+
+            try { _rabbitChannel?.Close(); } catch { }
+            try { _rabbitConnection?.Close(); } catch { }
+
+            _rabbitChannel = null;
+            _rabbitConnection = null;
+
+            return "OK_DISCONNECT";
         }
-        return line;
+    }
+
+    private double GenerateSimulatedValue(string type)
+    {
+        var rnd = new Random();
+        return type.ToUpper() switch
+        {
+            "TEMP" => Math.Round(15.0 + rnd.NextDouble() * 15.0, 1),
+            "HUM" => Math.Round(45.0 + rnd.NextDouble() * 35.0, 1),
+            "RUIDO" => Math.Round(45.0 + rnd.NextDouble() * 45.0, 1),
+            "PM2.5" => Math.Round(5.0 + rnd.NextDouble() * 35.0, 1),
+            "PM10" => Math.Round(10.0 + rnd.NextDouble() * 80.0, 1),
+            "LUZ" => Math.Round(100.0 + rnd.NextDouble() * 800.0, 1),
+            "AR" => Math.Round(0.5 + rnd.NextDouble() * 4.0, 2),
+            _ => Math.Round(rnd.NextDouble() * 100.0, 1)
+        };
+    }
+
+    private string DiscoverZone()
+    {
+        string[] pathsToTry = {
+            "sensors.csv",
+            "../Gateway/sensors.csv",
+            "../../Gateway/sensors.csv",
+            "../../../Gateway/sensors.csv",
+            "../../../../Gateway/sensors.csv",
+            "../Gateway/bin/Debug/net8.0/sensors.csv",
+            "../../Gateway/bin/Debug/net8.0/sensors.csv"
+        };
+
+        foreach (var path in pathsToTry)
+        {
+            if (File.Exists(path))
+            {
+                try
+                {
+                    var lines = File.ReadAllLines(path);
+                    foreach (var line in lines)
+                    {
+                        var trimmed = line.Trim();
+                        if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith("#"))
+                            continue;
+
+                        var parts = trimmed.Split(':');
+                        if (parts.Length >= 3 && string.Equals(parts[0].Trim(), _sensorId, StringComparison.OrdinalIgnoreCase))
+                        {
+                            return parts[2].Trim();
+                        }
+                    }
+                }
+                catch
+                {
+                    // Ignorar erros
+                }
+            }
+        }
+
+        return "ZONA_CENTRO";
+    }
+
+    private string GetUnitForType(string type)
+    {
+        return type.ToUpper() switch
+        {
+            "TEMP" => "C",
+            "HUM" => "%",
+            "RUIDO" => "dB",
+            "PM2.5" => "ug/m3",
+            "PM10" => "ug/m3",
+            "LUZ" => "lux",
+            _ => "n/a"
+        };
     }
 
     public void Dispose()
     {
+        StopAutomaticPublishing();
         StopHeartbeatAuto();
 
-        // Tentar desconexão ordenada se ainda estiver conectado
-        if (_connected && _writer != null)
+        if (_connected)
         {
             try
             {
-                SendMessage($"DISCONNECT {_sensorId}");
-                _reader?.ReadLine(); // Ler OK_DISCONNECT (best-effort)
+                SendDisconnect();
             }
             catch
             {
-                // Ignorar erros durante cleanup — a ligação pode já estar fechada
+                // Ignorar
             }
         }
 
         _connected = false;
         _typesRegistered = false;
-        _writer?.Dispose();
-        _reader?.Dispose();
-        _client?.Close();
-        _client?.Dispose();
+        _rabbitChannel?.Dispose();
+        _rabbitConnection?.Dispose();
     }
+}
+
+public class SensorMessage
+{
+    public string sensorId { get; set; } = null!;
+    public string zone { get; set; } = null!;
+    public string type { get; set; } = null!;
+    public double value { get; set; }
+    public string unit { get; set; } = null!;
+    public string timestamp { get; set; } = null!;
+    public string raw { get; set; } = null!;
 }

@@ -14,6 +14,10 @@ using Preprocessing;
 using Polly;
 using Polly.Retry;
 using Grpc.Core;
+using RabbitMQ.Client;
+using RabbitMQ.Client.Events;
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
 
 namespace Gateway
 {
@@ -55,7 +59,7 @@ namespace Gateway
         static readonly Mutex videoLogMutex = new Mutex(false, "GatewayVideoLogMutex");
 
         // gRPC Preprocessing configuration
-        static readonly string preprocessingUrl = Environment.GetEnvironmentVariable("PREPROCESSING_SERVICE_URL") ?? "http://localhost:50051";
+        static string preprocessingUrl = "http://localhost:50051";
         static GrpcChannel preprocessingChannel;
         static PreprocessingService.PreprocessingServiceClient preprocessingClient;
 
@@ -83,20 +87,36 @@ namespace Gateway
 
         static void Main(string[] args)
         {
-            // Validação dos parâmetros de arranque
-            if (args.Length < 1)
-            {
-                Console.WriteLine("Uso: Gateway <gateway_id> [server_ip] [server_port] [video_port] [sensor_port]");
-                return;
-            }
+            // Carregar configurações a partir do appsettings.json
+            var builder = new ConfigurationBuilder()
+                .SetBasePath(AppDomain.CurrentDomain.BaseDirectory)
+                .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true);
+            var config = builder.Build();
 
-            gatewayId = args[0];
-            serverIp = args.Length >= 2 ? args[1] : "127.0.0.1";
-            serverPort = args.Length >= 3 && int.TryParse(args[2], out int p) ? p : 9090;
-            int videoPort = args.Length >= 4 && int.TryParse(args[3], out int vp) ? vp : 8081;
-            int sensorPort = args.Length >= 5 && int.TryParse(args[4], out int sp) ? sp : 8080;
+            gatewayId = config["Gateway:Id"] ?? "GW1";
+            serverIp = config["Gateway:ServerIp"] ?? "127.0.0.1";
+            serverPort = int.TryParse(config["Gateway:ServerPort"], out int spVal) ? spVal : 9090;
+            int videoPort = int.TryParse(config["Gateway:VideoPort"], out int vpVal) ? vpVal : 8081;
+            preprocessingUrl = config["Gateway:PreprocessingUrl"] ?? Environment.GetEnvironmentVariable("PREPROCESSING_SERVICE_URL") ?? "http://localhost:50051";
+
+            string rabbitHost = config["RabbitMQ:Host"] ?? "localhost";
+            int rabbitPort = int.TryParse(config["RabbitMQ:Port"], out int rpVal) ? rpVal : 5672;
+            string rabbitUserName = config["RabbitMQ:UserName"] ?? "admin";
+            string rabbitPassword = config["RabbitMQ:Password"] ?? "admin";
+            string rabbitVirtualHost = config["RabbitMQ:VirtualHost"] ?? "onehealth";
+            string rabbitExchangeName = config["RabbitMQ:ExchangeName"] ?? "sensors.exchange";
+
+            // Sobrescrita por parâmetros de linha de comando (se fornecidos)
+            if (args.Length >= 1) gatewayId = args[0];
+            if (args.Length >= 2) serverIp = args[1];
+            if (args.Length >= 3 && int.TryParse(args[2], out int p)) serverPort = p;
+            if (args.Length >= 4 && int.TryParse(args[3], out int vp)) videoPort = vp;
 
             Console.WriteLine($"[GATEWAY] A iniciar com ID: {gatewayId}");
+            Console.WriteLine($"[CONFIG] Servidor Central: {serverIp}:{serverPort}");
+            Console.WriteLine($"[CONFIG] Video Port: {videoPort}");
+            Console.WriteLine($"[CONFIG] Preprocessing URL: {preprocessingUrl}");
+            Console.WriteLine($"[CONFIG] RabbitMQ: host={rabbitHost}:{rabbitPort}, user={rabbitUserName}, vhost={rabbitVirtualHost}, exchange={rabbitExchangeName}");
 
             // Inicializar cliente gRPC
             InitializeGrpcClients();
@@ -210,40 +230,138 @@ namespace Gateway
             threadAgregador.IsBackground = true;
             threadAgregador.Start();
 
-            // Iniciar o listener TCP para os Sensores na porta 8080
-            TcpListener sensorListener = null;
+            // 4. Iniciar Consumidor RabbitMQ para os Sensores
+            IConnection rabbitConnection = null;
+            IModel rabbitChannel = null;
             try
             {
-                sensorListener = new TcpListener(IPAddress.Any, sensorPort);
-                sensorListener.Start();
-                Console.WriteLine($"[GATEWAY] A escutar Sensores na porta {sensorPort}...");
-
-                // Ciclo principal que aceita novos sensores concorrentemente
-                while (isRunning)
+                var factory = new ConnectionFactory()
                 {
-                    if (sensorListener.Pending())
+                    HostName = rabbitHost,
+                    Port = rabbitPort,
+                    UserName = rabbitUserName,
+                    Password = rabbitPassword,
+                    VirtualHost = rabbitVirtualHost
+                };
+
+                rabbitConnection = factory.CreateConnection();
+                rabbitChannel = rabbitConnection.CreateModel();
+
+                rabbitChannel.ExchangeDeclare(
+                    exchange: rabbitExchangeName,
+                    type: ExchangeType.Topic,
+                    durable: true,
+                    autoDelete: false,
+                    arguments: null
+                );
+
+                // Criar fila exclusiva do gateway
+                var queueDeclareResult = rabbitChannel.QueueDeclare();
+                string queueName = queueDeclareResult.QueueName;
+
+                // Definir bindings
+                List<string> bindings = new List<string>();
+                if (args.Length >= 5 && !int.TryParse(args[4], out _))
+                {
+                    // Caso o utilizador passe wildcards explícitos (ex: ZONA_CENTRO.#,*.TEMP.#)
+                    string[] split = args[4].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                    foreach (var pattern in split)
                     {
-                        // Aceita um sensor e cria uma Thread para o seu atendimento
-                        TcpClient sensorClient = sensorListener.AcceptTcpClient();
-                        Thread sensorThread = new Thread(() => HandleSensor(sensorClient));
-                        // Marcar como background para não impedir o encerramento do processo
-                        sensorThread.IsBackground = true;
-                        sensorThread.Start();
+                        bindings.Add(pattern);
+                    }
+                }
+                else
+                {
+                    // Tentar carregar do appsettings.json
+                    var configBindings = config.GetSection("Bindings").GetChildren().Select(c => c.Value).Where(v => v != null).ToList();
+                    if (configBindings.Count > 0)
+                    {
+                        foreach (var binding in configBindings)
+                        {
+                            bindings.Add(binding!);
+                        }
                     }
                     else
                     {
-                        // Pausa curta para evitar consumo de CPU a 100%
-                        Thread.Sleep(100);
+                        // Fallback: Por omissão, obter zonas do sensors.csv
+                        var uniqueZones = configManager.GetAllSensors()
+                            .Select(s => s.Zona)
+                            .Where(z => !string.IsNullOrEmpty(z))
+                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .ToList();
+
+                        foreach (var zone in uniqueZones)
+                        {
+                            bindings.Add($"{zone}.#");
+                        }
                     }
+                }
+
+                foreach (var binding in bindings)
+                {
+                    rabbitChannel.QueueBind(queueName, rabbitExchangeName, binding);
+                    Console.WriteLine($"[GATEWAY] Fila vinculada ao padrão: '{binding}' no exchange '{rabbitExchangeName}'");
+                }
+
+                var consumer = new EventingBasicConsumer(rabbitChannel);
+                consumer.Received += (model, ea) =>
+                {
+                    ulong deliveryTag = ea.DeliveryTag;
+                    try
+                    {
+                        var body = ea.Body.ToArray();
+                        var message = Encoding.UTF8.GetString(body);
+                        bool shouldAck = ProcessarMensagemRabbit(message);
+                        
+                        if (shouldAck)
+                        {
+                            rabbitChannel.BasicAck(deliveryTag, multiple: false);
+                        }
+                        else
+                        {
+                            // NACK com requeue=true para tentar reprocessar mais tarde
+                            rabbitChannel.BasicNack(deliveryTag, multiple: false, requeue: true);
+                            Console.WriteLine($"[RABBITMQ] Mensagem NACKed com requeue=true. DeliveryTag: {deliveryTag}");
+                            
+                            // Dormir ligeiramente para evitar loops super rápidos caso o gRPC esteja fora do ar
+                            Thread.Sleep(1000);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[ERRO CONSUMO] Falha ao tratar callback do RabbitMQ: {ex.Message}");
+                        try
+                        {
+                            // Por segurança, NACK com requeue em caso de exceção imprevista
+                            rabbitChannel.BasicNack(deliveryTag, multiple: false, requeue: true);
+                        }
+                        catch (Exception nackEx)
+                        {
+                            Console.WriteLine($"[ERRO NACK] Falha ao enviar NACK: {nackEx.Message}");
+                        }
+                    }
+                };
+
+                rabbitChannel.BasicConsume(
+                    queue: queueName,
+                    autoAck: false, // Confirmação manual
+                    consumer: consumer
+                );
+
+                Console.WriteLine($"[GATEWAY] A escutar mensagens do RabbitMQ na fila '{queueName}'...");
+
+                // Ciclo principal mantendo o gateway ativo
+                while (isRunning)
+                {
+                    Thread.Sleep(100);
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[ERRO] Falha no listener de Sensores: {ex.Message}");
+                Console.WriteLine($"[ERRO] Falha no listener/consumer do RabbitMQ: {ex.Message}");
             }
             finally
             {
-                sensorListener?.Stop();
                 retryBuffer?.Stop();
                 heartbeatMonitor?.Stop();
 
@@ -261,6 +379,8 @@ namespace Gateway
                     }
                 }
 
+                try { rabbitChannel?.Close(); } catch { }
+                try { rabbitConnection?.Close(); } catch { }
                 serverClient?.Close();
             }
         }
@@ -465,310 +585,141 @@ namespace Gateway
             }
         }
 
-        /// <summary>
-        /// Trata a comunicação com um Sensor de forma independente (numa thread separada).
-        /// </summary>
-        static void HandleSensor(TcpClient sensorClient)
+        static bool ProcessarMensagemRabbit(string message)
         {
-            string currentSensorId = "UNKNOWN";
-            SensorState state = SensorState.AGUARDA_CONNECT;
-            const int HandshakeTimeoutMs = 10000; // 10 segundos para completar CONNECT + REGISTER_TYPES
-            bool handshakeCompleted = false;
-            List<string> sessionTypes = new List<string>();
-
-            // Timer que fecha a ligação se o handshake não completar em 10s
-            Timer handshakeTimer = new Timer(_ =>
-            {
-                if (!handshakeCompleted)
-                {
-                    Console.WriteLine($"[TIMEOUT] Sensor '{currentSensorId}' não completou o handshake em {HandshakeTimeoutMs / 1000}s — a fechar ligação.");
-                    try { sensorClient.Close(); } catch { }
-                }
-            }, null, HandshakeTimeoutMs, Timeout.Infinite);
-
             try
             {
-                using (var stream = sensorClient.GetStream())
-                using (var reader = new StreamReader(stream, Encoding.UTF8))
-                using (var writer = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true, NewLine = "\n" })
+                SensorMessage? msg = null;
+                try
                 {
-                    string line;
+                    msg = JsonSerializer.Deserialize<SensorMessage>(message);
+                }
+                catch (JsonException jsonEx)
+                {
+                    Console.WriteLine($"[ERRO RABBITMQ] Falha de desserialização JSON (Poison Message): {jsonEx.Message}");
+                    return true; // ACK to discard poison message
+                }
 
-                    // O ciclo vai decorrer lendo linha a linha enviada pelo sensor
-                    while (isRunning && (line = reader.ReadLine()) != null)
+                if (msg == null)
+                {
+                    Console.WriteLine("[ERRO RABBITMQ] Mensagem JSON nula (Poison Message).");
+                    return true; // ACK to discard
+                }
+
+                string sensorId = msg.sensorId;
+                string type = msg.type;
+
+                if (string.IsNullOrEmpty(sensorId))
+                {
+                    Console.WriteLine("[ERRO RABBITMQ] Mensagem sem sensorId (Poison Message).");
+                    return true; // ACK to discard
+                }
+
+                if (string.Equals(type, "HEARTBEAT", StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.WriteLine($"[RABBITMQ HEARTBEAT] Sensor '{sensorId}' heartbeat recebido.");
+                    var sensorHb = configManager?.GetSensor(sensorId);
+                    if (sensorHb != null)
                     {
-                        // Separa a mensagem por espaços simples
-                        string[] parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                        if (parts.Length == 0) continue;
-
-                        string command = parts[0];
-
-                        switch (command)
+                        if (sensorHb.Estado == "indisponivel" || sensorHb.Estado == "desligado")
                         {
-                            case "CONNECT":
-                                // CONNECT <sensor_id>
-                                if (parts.Length < 2)
-                                {
-                                    writer.WriteLine("ERR_INVALID_DATA");
-                                    break;
-                                }
+                            configManager?.ChangeSensorStatus(sensorId, "ativo");
+                            string recResponseHb = SendToServer($"SENSOR_STATUS {sensorId} ativo");
+                            if (recResponseHb != null)
+                            {
+                                Console.WriteLine($"[GATEWAY] SENSOR_STATUS (ativo após inatividade/HEARTBEAT via RabbitMQ) enviado para '{sensorId}'. Resposta: {recResponseHb}");
+                            }
+                        }
+                        configManager?.UpdateLastSync(sensorId, DateTime.UtcNow);
+                    }
+                    return true; // ACK
+                }
+                else if (string.Equals(type, "DISCONNECT", StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.WriteLine($"[RABBITMQ DISCONNECT] Sensor '{sensorId}' solicitou desconexão.");
+                    
+                    // Atualizar o estado do sensor na configuração CSV para 'desligado'
+                    configManager?.ChangeSensorStatus(sensorId, "desligado");
 
-                                if (state != SensorState.AGUARDA_CONNECT)
-                                {
-                                    writer.WriteLine("ERR_SEQUENCE");
-                                    break;
-                                }
+                    // Notificar o Servidor da mudança de estado
+                    string statusResponse = SendToServer($"SENSOR_STATUS {sensorId} desligado");
+                    if (statusResponse != null)
+                    {
+                        Console.WriteLine($"[GATEWAY] SENSOR_STATUS enviado ao Servidor para '{sensorId}' (desconexão via RabbitMQ). Resposta: {statusResponse}");
+                    }
+                    return true; // ACK
+                }
+                else
+                {
+                    // Trata-se de dados (TEMP, HUM, etc.)
+                    // Validação completa usando DataValidator
+                    DataValidationResult validationResult =
+                        DataValidator.ValidateAndProcessData(msg.raw, sensorId, configManager, null);
 
-                                currentSensorId = parts[1];
+                    Console.WriteLine(validationResult.LogMessage);
 
-                                // Validar o sensor contra a configuração CSV
-                                SensorConfig sensorCfg = configManager?.GetSensor(currentSensorId);
-                                
-                                // 1º - O sensor existe sequer no ficheiro? (Se for null, não existe)
-                                if (sensorCfg == null)
-                                {
-                                    Console.WriteLine($"[CONFIG] Sensor '{currentSensorId}' não existe no CSV — ligação rejeitada (ERR_NOT_REGISTERED).");
-                                    writer.WriteLine("ERR_NOT_REGISTERED");
-                                    return;
-                                }
+                    if (!validationResult.IsValid)
+                    {
+                        Console.WriteLine($"[AVISO VALIDAÇÃO] Leitura do sensor '{sensorId}' rejeitada na validação (Poison Message): {validationResult.ErrorCode}");
+                        return true; // ACK to discard poison message
+                    }
 
-                                // 2º - O sensor existe! Mas está banido ou em manutenção?
-                                string estadoActual = sensorCfg.Estado?.ToLower();
-                                if (estadoActual == "desativado" || estadoActual == "manutencao")
-                                {
-                                    Console.WriteLine($"[SENSOR '{currentSensorId}'] rejeitado — estado actual: {sensorCfg.Estado}.");
-                                    writer.WriteLine("ERR_SENSOR_INACTIVE");
-                                    return;
-                                }
+                    // Se ele estava 'indisponivel' ou 'desligado', volta a ficar 'ativo'.
+                    var sensor = configManager?.GetSensor(sensorId);
+                    if (sensor == null)
+                    {
+                        Console.WriteLine($"[AVISO VALIDAÇÃO] Sensor '{sensorId}' não encontrado após validação (Poison Message).");
+                        return true; // ACK to discard
+                    }
 
-                                // 3º - Se chegou aqui, existe e NÃO está banido. Pode entrar!
-                                // Verificar se já existe uma sessão ativa para este sensor
-                                lock (_sessionLock)
-                                {
-                                    if (_activeSessions.Contains(currentSensorId))
-                                    {
-                                        Console.WriteLine($"[GATEWAY] Sessão duplicada rejeitada para '{currentSensorId}'.");
-                                        writer.WriteLine("ERR_ALREADY_CONNECTED");
-                                        return;
-                                    }
-                                    _activeSessions.Add(currentSensorId);
-                                }
-                                state = SensorState.AGUARDA_REGISTER_TYPES;
-                                Console.WriteLine($"[SENSOR '{currentSensorId}'] conectou-se.");
-                                writer.WriteLine($"OK_CONNECTED {currentSensorId}");
-                                break;
-
-                            case "REGISTER_TYPES":
-                                // REGISTER_TYPES <t1,t2,...>
-                                if (parts.Length < 2)
-                                {
-                                    writer.WriteLine("ERR_INVALID_DATA");
-                                    break;
-                                }
-
-                                if (state != SensorState.AGUARDA_REGISTER_TYPES)
-                                {
-                                    writer.WriteLine("ERR_SEQUENCE");
-                                    break;
-                                }
-
-                                // AQUI COMEÇA A VERIFICAÇÃO NOVA:
-                                string[] tiposEnviados = parts[1].Split(',');
-                                SensorConfig configSensor = configManager?.GetSensor(currentSensorId);
-                                
-                                bool tiposValidos = true;
-                                if (configSensor != null)
-                                {
-                                    foreach (string tipo in tiposEnviados)
-                                    {
-                                        // Se o sensor enviar um tipo que NÃO está na sua lista do CSV, chumba!
-                                        if (!configSensor.TiposDados.Contains(tipo, StringComparer.OrdinalIgnoreCase))
-                                        {
-                                            tiposValidos = false;
-                                            break;
-                                        }
-                                    }
-                                }
-
-                                if (!tiposValidos)
-                                {
-                                    Console.WriteLine($"[AVISO] Sensor '{currentSensorId}' tentou registar tipos não autorizados.");
-                                    writer.WriteLine("ERR_TYPE_NOT_SUPPORTED");
-                                    break; // Não passa para OPERACIONAL!
-                                }
-                                // FIM DA VERIFICAÇÃO NOVA
-
-                                // Guardar os tipos negociados nesta sessão
-                                sessionTypes = new List<string>(tiposEnviados);
-
-                                state = SensorState.OPERACIONAL;
-                                handshakeCompleted = true;
-                                handshakeTimer.Dispose(); // Handshake concluído, cancelar o timeout
-                                Console.WriteLine($"[SENSOR '{currentSensorId}'] registou tipos: {parts[1]}");
-                                writer.WriteLine("OK_TYPES_REGISTERED");
-
-                                // Atualiza estado na config e notifica o Servidor de que se ligou
-                                configManager?.ChangeSensorStatus(currentSensorId, "ativo");
-                                configManager?.UpdateLastSync(currentSensorId, DateTime.UtcNow);
-                                string statusConnectResponse = SendToServer($"SENSOR_STATUS {currentSensorId} ativo");
-                                if (statusConnectResponse != null)
-                                {
-                                    Console.WriteLine($"[GATEWAY] SENSOR_STATUS (ativo) enviado ao Servidor para '{currentSensorId}'. Resposta: {statusConnectResponse}");
-                                }
-                                break;
-
-                            case "DATA":
-{
-                                // ── Verificação de sequência do protocolo ──
-                                // O sensor só pode enviar DATA depois de CONNECT + REGISTER_TYPES
-                                if (state != SensorState.OPERACIONAL)
-                                {
-                                    writer.WriteLine("ERR_SEQUENCE");
-                                    break;
-                                }
-
-                                Console.WriteLine($"[SENSOR '{currentSensorId}'] recebeu mensagem DATA: {line}");
-
-                                // ── Validação completa (Fase 3) ──
-                                // Delega toda a lógica de validação ao DataValidator,
-                                // que segue a ordem estrita: Registo → Estado → Tipo → Conteúdo → Sucesso
-                                DataValidationResult validationResult =
-                                    DataValidator.ValidateAndProcessData(line, currentSensorId, configManager, sessionTypes);
-
-                                // Registar o resultado da validação na consola
-                                Console.WriteLine(validationResult.LogMessage);
-
-                                if (!validationResult.IsValid)
-                                {
-                                    // Enviar o código de erro específico ao sensor
-                                    writer.WriteLine(validationResult.ErrorCode);
-                                    break;
-                                }
-                                // Se ele estava 'indisponivel' ou 'desligado', volta a ficar 'ativo'.
-                                var sensorAtual = configManager?.GetSensor(currentSensorId);
-                                if (sensorAtual != null && (sensorAtual.Estado == "indisponivel" || sensorAtual.Estado == "desligado"))
-                                {
-                                    configManager?.ChangeSensorStatus(currentSensorId, "ativo");
-                                    string recResponseData = SendToServer($"SENSOR_STATUS {currentSensorId} ativo");
-                                    if (recResponseData != null)
-                                    {
-                                        Console.WriteLine($"[GATEWAY] SENSOR_STATUS (ativo após inatividade/DATA) enviado para '{currentSensorId}'. Resposta: {recResponseData}");
-                                    }
-                                }
-
-                                // ── Encaminhar para o Servidor VIA AGREGADOR ──
-                                // Em vez de ligar o socket e enviar agora, colocamos na fila de agregação
-                                                                // ── Pré-Processamento gRPC ──
-                                double valorOriginal = double.Parse(parts[2], CultureInfo.InvariantCulture);
-                                var normalized = NormalizeReading(currentSensorId, parts[1], valorOriginal, "", parts[4], "");
-
-                                if (normalized == null || !normalized.IsValid)
-                                {
-                                string errCode = (normalized == null) ? "ERR_PREPROCESSING_FAILED" : "ERR_INVALID_DATA";
-                                Console.WriteLine($"[AVISO gRPC] Leitura do sensor '{currentSensorId}' rejeitada pelo gRPC Preprocessing.");
-                                writer.WriteLine(errCode);
-                                break;
-                                }
-
-                                if (Math.Abs(valorOriginal - normalized.Value) > 0.0001)
-                                {
-                                Console.WriteLine($"[GATEWAY gRPC] Valor normalizado para '{currentSensorId}': {valorOriginal} -> {normalized.Value:F2} (unidade original convertida)");
-                                }
-
-                                // Reconstruir a mensagem FORWARD com o valor normalizado
-                                string normalizedValueStr = normalized.Value.ToString("F2", CultureInfo.InvariantCulture);
-                                string normalizedForwardMsg = $"FORWARD {currentSensorId} {normalized.Type} {normalizedValueStr} {parts[3]} {normalized.Timestamp}";
-
-                                leiturasPendentes.Enqueue(normalizedForwardMsg);
-
-                                writer.WriteLine("OK");
-
-                                // Atualiza o last_sync sempre que é enviada uma mensagem DATA válida
-                                configManager?.UpdateLastSync(currentSensorId, DateTime.UtcNow);
-                                break;
-                                }
-
-                            case "HEARTBEAT":
-                                // HEARTBEAT <sensor_id> — Fase 3: atualiza last_sync
-                                if (state != SensorState.OPERACIONAL)
-                                {
-                                    writer.WriteLine("ERR_SEQUENCE");
-                                    break;
-                                }
-                                Console.WriteLine($"[SENSOR '{currentSensorId}'] heartbeat recebido.");
-                                var sensorHb = configManager?.GetSensor(currentSensorId);
-                                if (sensorHb != null && (sensorHb.Estado == "indisponivel" || sensorHb.Estado == "desligado"))
-                                {
-                                    configManager?.ChangeSensorStatus(currentSensorId, "ativo");
-                                    string recResponseHb = SendToServer($"SENSOR_STATUS {currentSensorId} ativo");
-                                    if (recResponseHb != null)
-                                    {
-                                        Console.WriteLine($"[GATEWAY] SENSOR_STATUS (ativo após inatividade/HEARTBEAT) enviado para '{currentSensorId}'. Resposta: {recResponseHb}");
-                                    }
-                                }
-                                writer.WriteLine("OK");
-                                configManager?.UpdateLastSync(currentSensorId, DateTime.UtcNow);
-                                break;
-
-                            case "DISCONNECT":
-                                // DISCONNECT <sensor_id>
-                                if (parts.Length < 2)
-                                {
-                                    writer.WriteLine("ERR_INVALID_DATA");
-                                    break;
-                                }
-
-                                // Verificar se o sensor já fez CONNECT antes de aceitar DISCONNECT
-                                if (state == SensorState.AGUARDA_CONNECT)
-                                {
-                                    writer.WriteLine("ERR_SEQUENCE");
-                                    break;
-                                }
-
-                                // CORREÇÃO: validar que o ID da mensagem corresponde ao sensor desta sessão
-                                if (parts[1] != currentSensorId)
-                                {
-                                    writer.WriteLine("ERR_INVALID_DATA");
-                                    break;
-                                }
-
-                                Console.WriteLine($"[SENSOR '{currentSensorId}'] solicitou desconexão.");
-                                writer.WriteLine("OK_DISCONNECT");
-
-                                // Atualizar o estado do sensor na configuração CSV para 'desligado'
-                                configManager?.ChangeSensorStatus(currentSensorId, "desligado");
-
-                                // Notificar o Servidor da mudança de estado (sd_rel.pdf secção 6.4)
-                                string statusResponse = SendToServer($"SENSOR_STATUS {currentSensorId} desligado");
-                                if (statusResponse != null)
-                                {
-                                    Console.WriteLine($"[GATEWAY] SENSOR_STATUS enviado ao Servidor para '{currentSensorId}'. Resposta: {statusResponse}");
-                                }
-
-                                return;
-
-                            default:
-                                Console.WriteLine($"[AVISO] Comando desconhecido de {currentSensorId}: {line}");
-                                writer.WriteLine("ERR_INVALID_DATA");
-                                break;
+                    if (sensor.Estado == "indisponivel" || sensor.Estado == "desligado")
+                    {
+                        configManager?.ChangeSensorStatus(sensorId, "ativo");
+                        string recResponseData = SendToServer($"SENSOR_STATUS {sensorId} ativo");
+                        if (recResponseData != null)
+                        {
+                            Console.WriteLine($"[GATEWAY] SENSOR_STATUS (ativo após inatividade/DATA via RabbitMQ) enviado para '{sensorId}'. Resposta: {recResponseData}");
                         }
                     }
+
+                    // Pré-Processamento gRPC
+                    double valorOriginal = msg.value;
+                    var normalized = NormalizeReading(sensorId, type, valorOriginal, msg.unit, msg.timestamp, msg.raw);
+
+                    if (normalized == null)
+                    {
+                        // gRPC Preprocessing failed or service is offline.
+                        // We must NACK with requeue so we can try again when it is online!
+                        Console.WriteLine($"[RABBITMQ NACK] Falha ao normalizar leitura do sensor '{sensorId}' (gRPC offline). Requeuing...");
+                        return false; 
+                    }
+
+                    if (!normalized.IsValid)
+                    {
+                        Console.WriteLine($"[AVISO gRPC] Leitura do sensor '{sensorId}' rejeitada pelo gRPC Preprocessing (Poison/Invalid Message).");
+                        return true; // ACK to discard
+                    }
+
+                    if (Math.Abs(valorOriginal - normalized.Value) > 0.0001)
+                    {
+                        Console.WriteLine($"[GATEWAY gRPC] Valor normalizado para '{sensorId}': {valorOriginal} -> {normalized.Value:F2} (unidade original convertida)");
+                    }
+
+                    // Reconstruir a mensagem FORWARD com o valor normalizado
+                    string normalizedValueStr = normalized.Value.ToString("F2", CultureInfo.InvariantCulture);
+                    string normalizedForwardMsg = $"FORWARD {sensorId} {normalized.Type} {normalizedValueStr} {sensor.Zona} {normalized.Timestamp}";
+
+                    leiturasPendentes.Enqueue(normalizedForwardMsg);
+
+                    // Atualiza o last_sync sempre que é processada uma mensagem DATA válida
+                    configManager?.UpdateLastSync(sensorId, DateTime.UtcNow);
+                    return true; // ACK
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[ERRO SENSOR '{currentSensorId}'] A conexão caiu de forma inesperada: {ex.Message}");
-            }
-            finally
-            {
-                handshakeTimer.Dispose();
-                sensorClient.Close();
-                // Remover a sessão ativa para este sensor
-                lock (_sessionLock)
-                {
-                    _activeSessions.Remove(currentSensorId);
-                }
-                Console.WriteLine($"[GATEWAY] Atendimento ao SENSOR '{currentSensorId}' finalizado.");
+                Console.WriteLine($"[ERRO PROCESSAMENTO RABBIT] Falha inesperada ao processar mensagem: {ex.Message}");
+                return false; // NACK with requeue
             }
         }
     
@@ -940,5 +891,16 @@ namespace Gateway
                 return null;
             }
         }
+    }
+
+    public class SensorMessage
+    {
+        public string sensorId { get; set; }
+        public string zone { get; set; }
+        public string type { get; set; }
+        public double value { get; set; }
+        public string unit { get; set; }
+        public string timestamp { get; set; }
+        public string raw { get; set; }
     }
 }

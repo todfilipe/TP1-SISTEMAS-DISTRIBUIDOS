@@ -8,9 +8,12 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Copiar o ficheiro sensors.csv para o diretório de saída -->
+    <!-- Copiar o ficheiro sensors.csv e appsettings.json para o diretório de saída -->
     <None Update="sensors.csv">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="appsettings.json">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
   </ItemGroup>
 
@@ -22,6 +25,9 @@
     <PackageReference Include="Grpc.Net.Client" Version="2.62.0" />
     <PackageReference Include="Google.Protobuf" Version="3.26.1" />
     <PackageReference Include="Polly" Version="8.6.6" />
+    <PackageReference Include="RabbitMQ.Client" Version="6.8.1" />
+    <PackageReference Include="Microsoft.Extensions.Configuration" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="8.0.0" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,0 +1,53 @@
+{
+  "rabbit_version": "3.12.0",
+  "users": [
+    {
+      "name": "admin",
+      "password": "admin",
+      "tags": [
+        "administrator"
+      ]
+    },
+    {
+      "name": "guest",
+      "password": "guest",
+      "tags": [
+        "administrator"
+      ]
+    }
+  ],
+  "vhosts": [
+    {
+      "name": "/"
+    },
+    {
+      "name": "onehealth"
+    }
+  ],
+  "permissions": [
+    {
+      "user": "admin",
+      "vhost": "onehealth",
+      "configure": ".*",
+      "write": ".*",
+      "read": ".*"
+    },
+    {
+      "user": "admin",
+      "vhost": "/",
+      "configure": ".*",
+      "write": ".*",
+      "read": ".*"
+    },
+    {
+      "user": "guest",
+      "vhost": "/",
+      "configure": ".*",
+      "write": ".*",
+      "read": ".*"
+    }
+  ],
+  "queues": [],
+  "exchanges": [],
+  "bindings": []
+}
