@@ -1,12 +1,77 @@
-version: '3.8'
+# docker-compose.yml — Orquestração da Fase 1 (TP2 Sistemas Distribuídos)
+# Arranca o broker RabbitMQ (Fase 2) e os dois serviços RPC Python (Fase 1).
+# Nota: o atributo "version" foi removido por estar obsoleto em Docker Compose v2+.
 
 services:
+  # ─────────────────────────────────────────────────────────────
+  # RabbitMQ — broker Pub/Sub (usado na Fase 2)
+  # ─────────────────────────────────────────────────────────────
   rabbitmq:
     image: rabbitmq:3-management
     container_name: rabbitmq
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - "5672:5672"     # porta AMQP
+      - "15672:15672"   # consola de gestão Web
     volumes:
       - ./rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
       - ./rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
+    networks:
+      - sd-net
+    healthcheck:
+      # Confirma que o nó RabbitMQ está vivo e a responder
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  # ─────────────────────────────────────────────────────────────
+  # Pré-Processamento — serviço gRPC (porta 50051)
+  # Recebe RawReading do Gateway e devolve NormalizedReading.
+  # ─────────────────────────────────────────────────────────────
+  preprocessing:
+    build: ./services/preprocessing
+    container_name: preprocessing
+    ports:
+      - "50051:50051"
+    networks:
+      - sd-net
+    restart: unless-stopped
+    healthcheck:
+      # Teste TCP leve: confirma que a porta gRPC 50051 está aberta
+      test: ["CMD", "python", "-c", "import socket,sys; s=socket.socket(); s.settimeout(2); sys.exit(s.connect_ex(('localhost',50051)))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ─────────────────────────────────────────────────────────────
+  # Análise — serviço gRPC (porta 50052)
+  # Recebe leituras (no request) e devolve estatísticas/previsões.
+  # O volume ./data continua montado (read-only) por compatibilidade
+  # com o TP1; na Fase 3 será substituído pelo MongoDB.
+  # ─────────────────────────────────────────────────────────────
+  analysis:
+    build: ./services/analysis
+    container_name: analysis
+    ports:
+      - "50052:50052"
+    volumes:
+      - ./data:/app/data:ro
+    networks:
+      - sd-net
+    restart: unless-stopped
+    healthcheck:
+      # Teste TCP leve: confirma que a porta gRPC 50052 está aberta
+      test: ["CMD", "python", "-c", "import socket,sys; s=socket.socket(); s.settimeout(2); sys.exit(s.connect_ex(('localhost',50052)))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+# Rede explícita partilhada por todos os serviços (e, futuramente,
+# pelos contentores de Gateway/Servidor quando forem dockerizados).
+networks:
+  sd-net:
+    driver: bridge
+    name: sd-net

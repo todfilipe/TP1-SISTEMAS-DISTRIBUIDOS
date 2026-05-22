@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0e\x61nalysis.proto\x12\x08\x61nalysis\"a\n\x0f\x41nalysisRequest\x12\x0c\n\x04type\x18\x01 \x01(\t\x12\x0c\n\x04zone\x18\x02 \x01(\t\x12\x10\n\x08sensorId\x18\x03 \x01(\t\x12\x10\n\x08\x64\x61teFrom\x18\x04 \x01(\t\x12\x0e\n\x06\x64\x61teTo\x18\x05 \x01(\t\"g\n\x0e\x41nalysisResult\x12\x15\n\rresultSummary\x18\x01 \x01(\t\x12\x17\n\x0f\x63omputedAverage\x18\x02 \x01(\x01\x12\x12\n\nalertLevel\x18\x03 \x01(\t\x12\x11\n\ttimestamp\x18\x04 \x01(\t\"I\n\x11PredictionRequest\x12\x0c\n\x04type\x18\x01 \x01(\t\x12\x0c\n\x04zone\x18\x02 \x01(\t\x12\x18\n\x10periodsToPredict\x18\x03 \x01(\x05\"@\n\x10PredictionResult\x12\x19\n\x11predictionSummary\x18\x01 \x01(\t\x12\x11\n\ttimestamp\x18\x02 \x01(\t2\x95\x01\n\x0f\x41nalysisService\x12>\n\x07\x41nalyze\x12\x19.analysis.AnalysisRequest\x1a\x18.analysis.AnalysisResult\x12\x42\n\x07Predict\x12\x1b.analysis.PredictionRequest\x1a\x1a.analysis.PredictionResultB\x0b\xaa\x02\x08\x41nalysisb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0e\x61nalysis.proto\x12\x08\x61nalysis\"Y\n\x07Reading\x12\r\n\x05value\x18\x01 \x01(\x01\x12\x11\n\ttimestamp\x18\x02 \x01(\t\x12\x0c\n\x04type\x18\x03 \x01(\t\x12\x10\n\x08sensorId\x18\x04 \x01(\t\x12\x0c\n\x04zone\x18\x05 \x01(\t\"\x86\x01\n\x0f\x41nalysisRequest\x12\x0c\n\x04type\x18\x01 \x01(\t\x12\x0c\n\x04zone\x18\x02 \x01(\t\x12\x10\n\x08sensorId\x18\x03 \x01(\t\x12\x10\n\x08\x64\x61teFrom\x18\x04 \x01(\t\x12\x0e\n\x06\x64\x61teTo\x18\x05 \x01(\t\x12#\n\x08readings\x18\x06 \x03(\x0b\x32\x11.analysis.Reading\"\x89\x02\n\x0e\x41nalysisResult\x12\x15\n\rresultSummary\x18\x01 \x01(\t\x12\x17\n\x0f\x63omputedAverage\x18\x02 \x01(\x01\x12\x12\n\nalertLevel\x18\x03 \x01(\t\x12\x11\n\ttimestamp\x18\x04 \x01(\t\x12\x0c\n\x04mean\x18\x05 \x01(\x01\x12\x0e\n\x06stdDev\x18\x06 \x01(\x01\x12\x0b\n\x03min\x18\x07 \x01(\x01\x12\x0b\n\x03max\x18\x08 \x01(\x01\x12\x15\n\routliersCount\x18\t \x01(\x05\x12\x12\n\ntrendSlope\x18\n \x01(\x01\x12\r\n\x05trend\x18\x0b \x01(\t\x12\x19\n\x11movingAverageLast\x18\x0c \x01(\x01\x12\x13\n\x0bsampleCount\x18\r \x01(\x05\"\x80\x01\n\x11PredictionRequest\x12\x0c\n\x04type\x18\x01 \x01(\t\x12\x0c\n\x04zone\x18\x02 \x01(\t\x12\x18\n\x10periodsToPredict\x18\x03 \x01(\x05\x12#\n\x08readings\x18\x04 \x03(\x0b\x32\x11.analysis.Reading\x12\x10\n\x08strategy\x18\x05 \x01(\t\"h\n\x10PredictionResult\x12\x19\n\x11predictionSummary\x18\x01 \x01(\t\x12\x11\n\ttimestamp\x18\x02 \x01(\t\x12\x10\n\x08\x66orecast\x18\x03 \x03(\x01\x12\x14\n\x0cstrategyUsed\x18\x04 \x01(\t2\x95\x01\n\x0f\x41nalysisService\x12>\n\x07\x41nalyze\x12\x19.analysis.AnalysisRequest\x1a\x18.analysis.AnalysisResult\x12\x42\n\x07Predict\x12\x1b.analysis.PredictionRequest\x1a\x1a.analysis.PredictionResultB\x0b\xaa\x02\x08\x41nalysisb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -32,14 +32,16 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'analysis_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'\252\002\010Analysis'
-  _globals['_ANALYSISREQUEST']._serialized_start=28
-  _globals['_ANALYSISREQUEST']._serialized_end=125
-  _globals['_ANALYSISRESULT']._serialized_start=127
-  _globals['_ANALYSISRESULT']._serialized_end=230
-  _globals['_PREDICTIONREQUEST']._serialized_start=232
-  _globals['_PREDICTIONREQUEST']._serialized_end=305
-  _globals['_PREDICTIONRESULT']._serialized_start=307
-  _globals['_PREDICTIONRESULT']._serialized_end=371
-  _globals['_ANALYSISSERVICE']._serialized_start=374
-  _globals['_ANALYSISSERVICE']._serialized_end=523
+  _globals['_READING']._serialized_start=28
+  _globals['_READING']._serialized_end=117
+  _globals['_ANALYSISREQUEST']._serialized_start=120
+  _globals['_ANALYSISREQUEST']._serialized_end=254
+  _globals['_ANALYSISRESULT']._serialized_start=257
+  _globals['_ANALYSISRESULT']._serialized_end=522
+  _globals['_PREDICTIONREQUEST']._serialized_start=525
+  _globals['_PREDICTIONREQUEST']._serialized_end=653
+  _globals['_PREDICTIONRESULT']._serialized_start=655
+  _globals['_PREDICTIONRESULT']._serialized_end=759
+  _globals['_ANALYSISSERVICE']._serialized_start=762
+  _globals['_ANALYSISSERVICE']._serialized_end=911
 # @@protoc_insertion_point(module_scope)

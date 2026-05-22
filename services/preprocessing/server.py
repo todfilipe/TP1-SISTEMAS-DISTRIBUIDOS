@@ -48,7 +48,8 @@ def parse_raw_format(raw_format_str):
                 'type': data.get('type'),
                 'value': data.get('value'),
                 'unit': data.get('unit'),
-                'timestamp': data.get('timestamp')
+                'timestamp': data.get('timestamp'),
+                'zone': data.get('zone') or data.get('zona')
             }
         except Exception as e:
             logger.debug(f"JSON parsing failed: {e}")
@@ -67,7 +68,8 @@ def parse_raw_format(raw_format_str):
                 'type': res.get('type'),
                 'value': res.get('value'),
                 'unit': res.get('unit'),
-                'timestamp': res.get('timestamp')
+                'timestamp': res.get('timestamp'),
+                'zone': res.get('zone') or res.get('zona')
             }
             # Try to convert value to float
             if mapped['value'] is not None:
@@ -136,6 +138,7 @@ class PreprocessingServiceServicer(preprocessing_pb2_grpc.PreprocessingServiceSe
         unit = request.unit
         timestamp = request.timestamp
         raw_format = request.rawFormat
+        zone = request.zone
 
         # 1. Parse rawFormat if provided to override/extract empty or default fields
         try:
@@ -151,6 +154,8 @@ class PreprocessingServiceServicer(preprocessing_pb2_grpc.PreprocessingServiceSe
                     unit = str(parsed['unit'])
                 if parsed.get('timestamp'):
                     timestamp = str(parsed['timestamp'])
+                if parsed.get('zone'):
+                    zone = str(parsed['zone'])
         except Exception as e:
             logger.error(f"Error overriding fields from parsed rawFormat: {e}")
 
@@ -219,7 +224,8 @@ class PreprocessingServiceServicer(preprocessing_pb2_grpc.PreprocessingServiceSe
             unit=unit,
             timestamp=timestamp,
             rawFormat=raw_format,
-            isValid=is_valid
+            isValid=is_valid,
+            zone=zone
         )
         return response
 

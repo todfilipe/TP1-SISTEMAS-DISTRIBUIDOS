@@ -173,6 +173,55 @@ namespace Servidor
         }
 
         /// <summary>
+        /// Representa uma medição lida do store interno do Servidor.
+        /// Usada para alimentar os pedidos gRPC ao serviço de Análise.
+        /// </summary>
+        public record Medicao(double Valor, string Timestamp, string SensorId, string Zona, string Tipo);
+
+        /// <summary>
+        /// Obtém medições do store interno (SQLite do Servidor) aplicando filtros.
+        /// O Servidor é o dono destes dados; recolhe-os aqui e envia-os ao serviço
+        /// de Análise no próprio request (o serviço de Análise não conhece a BD).
+        /// Na Fase 3, a fonte passará a ser MongoDB sem alterar a assinatura.
+        /// </summary>
+        public List<Medicao> ObterMedicoes(string? tipo = null, string? zona = null,
+            string? sensorId = null, string? dateFrom = null, string? dateTo = null)
+        {
+            var resultado = new List<Medicao>();
+            try
+            {
+                using var conn = new SqliteConnection(_connectionString);
+                conn.Open();
+
+                var sql = new System.Text.StringBuilder(
+                    "SELECT valor, timestamp, sensor_id, zona, tipo_dado FROM medicoes WHERE 1=1");
+                var p = new DynamicParameters();
+
+                if (!string.IsNullOrWhiteSpace(tipo)) { sql.Append(" AND UPPER(tipo_dado) = @tipo"); p.Add("tipo", tipo.Trim().ToUpperInvariant()); }
+                if (!string.IsNullOrWhiteSpace(zona)) { sql.Append(" AND UPPER(zona) = @zona"); p.Add("zona", zona.Trim().ToUpperInvariant()); }
+                if (!string.IsNullOrWhiteSpace(sensorId)) { sql.Append(" AND UPPER(sensor_id) = @sid"); p.Add("sid", sensorId.Trim().ToUpperInvariant()); }
+                if (!string.IsNullOrWhiteSpace(dateFrom)) { sql.Append(" AND timestamp >= @from"); p.Add("from", dateFrom.Trim()); }
+                if (!string.IsNullOrWhiteSpace(dateTo)) { sql.Append(" AND timestamp <= @to"); p.Add("to", dateTo.Trim()); }
+                sql.Append(" ORDER BY timestamp ASC");
+
+                foreach (var row in conn.Query(sql.ToString(), p))
+                {
+                    resultado.Add(new Medicao(
+                        Convert.ToDouble(row.valor),
+                        (string)(row.timestamp ?? ""),
+                        (string)(row.sensor_id ?? ""),
+                        (string)(row.zona ?? ""),
+                        (string)(row.tipo_dado ?? "")));
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[DataStore] ERRO ao obter medições: {ex.Message}");
+            }
+            return resultado;
+        }
+
+        /// <summary>
         /// Regista uma alteração de estado de um sensor.
         /// INSERT OR REPLACE garante um único registo por sensor_id.
         /// </summary>

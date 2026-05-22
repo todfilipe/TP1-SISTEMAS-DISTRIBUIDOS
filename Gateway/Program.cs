@@ -684,7 +684,9 @@ namespace Gateway
 
                     // Pré-Processamento gRPC
                     double valorOriginal = msg.value;
-                    var normalized = NormalizeReading(sensorId, type, valorOriginal, msg.unit, msg.timestamp, msg.raw);
+                    // A zona vem da mensagem do sensor; se vazia, usar a configurada no sensors.csv
+                    string zonaLeitura = !string.IsNullOrEmpty(msg.zone) ? msg.zone : sensor.Zona;
+                    var normalized = NormalizeReading(sensorId, type, valorOriginal, msg.unit, msg.timestamp, msg.raw, zonaLeitura);
 
                     if (normalized == null)
                     {
@@ -705,9 +707,12 @@ namespace Gateway
                         Console.WriteLine($"[GATEWAY gRPC] Valor normalizado para '{sensorId}': {valorOriginal} -> {normalized.Value:F2} (unidade original convertida)");
                     }
 
-                    // Reconstruir a mensagem FORWARD com o valor normalizado
+                    // Reconstruir a mensagem FORWARD com o valor normalizado.
+                    // A zona é propagada a partir da NormalizedReading devolvida pelo gRPC
+                    // (com fallback para a zona configurada no sensor).
                     string normalizedValueStr = normalized.Value.ToString("F2", CultureInfo.InvariantCulture);
-                    string normalizedForwardMsg = $"FORWARD {sensorId} {normalized.Type} {normalizedValueStr} {sensor.Zona} {normalized.Timestamp}";
+                    string zonaFinal = !string.IsNullOrEmpty(normalized.Zone) ? normalized.Zone : sensor.Zona;
+                    string normalizedForwardMsg = $"FORWARD {sensorId} {normalized.Type} {normalizedValueStr} {zonaFinal} {normalized.Timestamp}";
 
                     leiturasPendentes.Enqueue(normalizedForwardMsg);
 
@@ -866,7 +871,7 @@ namespace Gateway
             }
         }
 
-        static NormalizedReading NormalizeReading(string sensorId, string type, double value, string unit, string timestamp, string rawFormat)
+        static NormalizedReading NormalizeReading(string sensorId, string type, double value, string unit, string timestamp, string rawFormat, string zone)
         {
             var request = new RawReading
             {
@@ -875,7 +880,8 @@ namespace Gateway
                 Value = value,
                 Unit = unit ?? "",
                 Timestamp = timestamp,
-                RawFormat = rawFormat ?? ""
+                RawFormat = rawFormat ?? "",
+                Zone = zone ?? ""
             };
 
             try

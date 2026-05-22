@@ -174,6 +174,64 @@ Tipos válidos: `TEMP`, `HUM`, `AR`, `RUIDO`, `PM2.5`, `PM10`, `LUZ`, `VIDEO`.
 
 ---
 
+## TP2 — Fase 1: Serviços RPC (gRPC)
+
+A Fase 1 do TP2 introduz dois microserviços **Python** que comunicam por **gRPC**
+com os componentes .NET, desacoplando o pré-processamento e a análise:
+
+| Serviço | Porta | Linguagem | Responsabilidade |
+|---------|-------|-----------|------------------|
+| **preprocessing** | `50051` | Python | Normaliza leituras (parsing JSON/XML/CSV, conversão F/K→C, validação de ranges) |
+| **analysis** | `50052` | Python | Estatísticas (média, desvio, outliers z-score), tendência (regressão linear) e previsão (linear/EWMA) |
+
+O **Gateway** invoca `Normalize()` (com retry via Polly); o **Servidor** recolhe as
+leituras do seu store interno e invoca `Analyze()/Predict()` (também com retry via Polly).
+O serviço de Análise é **puro**: recebe os dados no próprio request e não conhece a BD.
+
+### Como correr os serviços via Docker
+
+Pré-requisitos: **Docker** e **Docker Compose v2+**.
+
+```bash
+# 1. (Opcional) Preparar variáveis de ambiente
+cp .env.example .env        # ajustar URLs/credenciais se necessário
+
+# 2. Arrancar RabbitMQ + serviços RPC (build automático dos Dockerfiles)
+docker compose up -d --build
+
+# 3. Confirmar que os três serviços estão "healthy"
+docker compose ps
+
+# 4. Ver logs de um serviço
+docker compose logs -f analysis
+
+# 5. Parar tudo
+docker compose down
+```
+
+Os clientes .NET leem as URLs dos serviços a partir de variáveis de ambiente
+(`PREPROCESSING_SERVICE_URL`, `ANALYSIS_SERVICE_URL`) ou do `appsettings.json`,
+com fallback para `localhost:50051` / `localhost:50052`.
+
+### Regenerar os stubs gRPC
+
+Os stubs **C#** são gerados automaticamente no `dotnet build` (referências `<Protobuf>`).
+Os stubs **Python** são regenerados com:
+
+```bash
+bash proto/build.sh           # gera em proto/, services/preprocessing/ e services/analysis/
+```
+
+### Correr os testes (pytest)
+
+```bash
+pip install -r services/preprocessing/requirements.txt
+pip install -r services/analysis/requirements.txt
+pytest services/             # corre os testes de preprocessing e analysis
+```
+
+---
+
 ## Documentação Adicional
 
 - [`docs/Protocolo_TP1_2526.pdf`](./docs/Protocolo_TP1_2526.pdf) — Enunciado oficial

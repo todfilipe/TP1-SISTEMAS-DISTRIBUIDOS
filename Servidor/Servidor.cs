@@ -1,5 +1,8 @@
 using Grpc.Net.Client;
+using Grpc.Core;
 using Analysis;
+using Polly;
+using Polly.Retry;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -39,6 +42,32 @@ namespace Servidor
 
         private static readonly List<AnalysisResult> HistoricoAnalises = new();
         private static readonly object HistoricoLock = new();
+
+        // Pipeline de resiliência Polly para chamadas gRPC ao serviço de Análise.
+        // Retry exponencial: 3 tentativas com backoff de 1/2/4 segundos.
+        // Filosofia idêntica à do Gateway (paridade entre componentes).
+        private static readonly ResiliencePipeline _grpcPipeline =
+            new ResiliencePipelineBuilder()
+                .AddRetry(new RetryStrategyOptions
+                {
+                    ShouldHandle = new PredicateBuilder()
+                        .Handle<RpcException>(ex => ex.StatusCode == StatusCode.Unavailable ||
+                                                    ex.StatusCode == StatusCode.DeadlineExceeded ||
+                                                    ex.StatusCode == StatusCode.Internal)
+                        .Handle<Exception>(),
+                    MaxRetryAttempts = 3,
+                    BackoffType = DelayBackoffType.Exponential,
+                    UseJitter = false,
+                    Delay = TimeSpan.FromSeconds(1),
+                    OnRetry = args =>
+                    {
+                        Console.WriteLine($"[Servidor][Polly] Tentativa {args.AttemptNumber + 1} falhou. " +
+                                          $"Nova tentativa em {args.RetryDelay.TotalSeconds}s. Erro: {args.Outcome.Exception?.Message}");
+                        return default;
+                    }
+                })
+                .AddTimeout(TimeSpan.FromSeconds(10))
+                .Build();
 
         public ServidorTCP(int porta = 9090)
         {
@@ -265,10 +294,27 @@ namespace Servidor
                 DateTo = dateTo ?? ""
             };
 
-            Console.WriteLine($"[Servidor] A enviar pedido de análise ao AnalysisService gRPC...");
+            // Recolher as leituras do store interno do Servidor e enviá-las no request.
+            // O serviço de Análise é puro: não conhece a BD, apenas calcula sobre os dados recebidos.
+            var medicoes = _dataStore.ObterMedicoes(tipo, zona, sensorId, dateFrom, dateTo);
+            foreach (var m in medicoes)
+            {
+                request.Readings.Add(new Reading
+                {
+                    Value = m.Valor,
+                    Timestamp = m.Timestamp ?? "",
+                    Type = m.Tipo ?? "",
+                    SensorId = m.SensorId ?? "",
+                    Zone = m.Zona ?? ""
+                });
+            }
+            Console.WriteLine($"[Servidor] {request.Readings.Count} leitura(s) recolhida(s) do store interno para análise.");
+
+            Console.WriteLine($"[Servidor] A enviar pedido de análise ao AnalysisService gRPC (com resiliência Polly)...");
             try
             {
-                AnalysisResult response = _analysisClient.Analyze(request);
+                // Envolver a chamada gRPC no pipeline Polly (retry exponencial 1/2/4s).
+                AnalysisResult response = _grpcPipeline.Execute(() => _analysisClient.Analyze(request));
 
                 Console.WriteLine("\n╔══════════════════════════════════════════════╗");
                 Console.WriteLine("║            RESULTADO DA ANÁLISE              ║");
@@ -284,7 +330,17 @@ namespace Servidor
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[ERRO gRPC] Falha ao executar análise via gRPC: {ex.Message}");
+                // Falha após todas as tentativas: regista e devolve um resultado de falha
+                // (sem rebentar o programa).
+                Console.WriteLine($"[ERRO gRPC] Falha ao executar análise via gRPC após retentativas: {ex.Message}");
+                var falha = new AnalysisResult
+                {
+                    ResultSummary = $"FALHA: serviço de Análise indisponível após 3 tentativas ({ex.Message}).",
+                    ComputedAverage = 0.0,
+                    AlertLevel = "UNKNOWN",
+                    Timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+                };
+                GuardarResultadoAnalise(falha, request);
             }
         }
 
@@ -300,17 +356,34 @@ namespace Servidor
             {
                 Type = tipo ?? "",
                 Zone = zona ?? "",
-                PeriodsToPredict = periodos
+                PeriodsToPredict = periodos,
+                Strategy = "linear"
             };
 
-            Console.WriteLine($"[Servidor] A enviar pedido de previsão ao AnalysisService gRPC...");
+            // Recolher o histórico do store interno e enviá-lo no request.
+            var medicoes = _dataStore.ObterMedicoes(tipo, zona);
+            foreach (var m in medicoes)
+            {
+                request.Readings.Add(new Reading
+                {
+                    Value = m.Valor,
+                    Timestamp = m.Timestamp ?? "",
+                    Type = m.Tipo ?? "",
+                    SensorId = m.SensorId ?? "",
+                    Zone = m.Zona ?? ""
+                });
+            }
+            Console.WriteLine($"[Servidor] {request.Readings.Count} leitura(s) histórica(s) recolhida(s) para previsão.");
+
+            Console.WriteLine($"[Servidor] A enviar pedido de previsão ao AnalysisService gRPC (com resiliência Polly)...");
             try
             {
-                PredictionResult response = _analysisClient.Predict(request);
+                PredictionResult response = _grpcPipeline.Execute(() => _analysisClient.Predict(request));
 
                 Console.WriteLine("\n╔══════════════════════════════════════════════╗");
                 Console.WriteLine("║            RESULTADO DA PREVISÃO             ║");
                 Console.WriteLine("╠══════════════════════════════════════════════╣");
+                Console.WriteLine($"║ Estratégia:      {response.StrategyUsed,27} ║");
                 Console.WriteLine($"║ Timestamp:       {response.Timestamp,27} ║");
                 Console.WriteLine("╠══════════════════════════════════════════════╣");
                 Console.WriteLine($"  Sumário: {response.PredictionSummary}");
@@ -318,7 +391,9 @@ namespace Servidor
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[ERRO gRPC] Falha ao executar previsão via gRPC: {ex.Message}");
+                // Falha após todas as tentativas: regista e devolve um resultado de falha.
+                Console.WriteLine($"[ERRO gRPC] Falha ao executar previsão via gRPC após retentativas: {ex.Message}");
+                Console.WriteLine($"  Sumário: FALHA: serviço de Análise indisponível após 3 tentativas ({ex.Message}).");
             }
         }
 

@@ -5,3 +5,14 @@ obj/
 *.db
 *.sqlite
 *.sqlite3
+
+# Variáveis de ambiente (segredos) — manter fora do controlo de versão
+.env
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Estado local do Claude Code (config da máquina, não pertence ao repo)
+.claude/

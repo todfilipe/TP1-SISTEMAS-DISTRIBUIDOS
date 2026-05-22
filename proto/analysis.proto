@@ -9,28 +9,58 @@ service AnalysisService {
   rpc Predict(PredictionRequest) returns (PredictionResult);
 }
 
+// Uma leitura individual transportada pelo cliente.
+// Desacopla o serviço de análise da estrutura interna da BD do cliente:
+// o cliente envia os dados, o serviço apenas calcula.
+message Reading {
+  double value = 1;
+  string timestamp = 2;
+  string type = 3;
+  string sensorId = 4;
+  string zone = 5;
+}
+
 message AnalysisRequest {
+  // Metadados/filtros declarativos (informativos para o resumo/log).
   string type = 1;
   string zone = 2;
   string sensorId = 3;
   string dateFrom = 4;
   string dateTo = 5;
+  // Dados a analisar (preenchidos pelo cliente — Servidor).
+  repeated Reading readings = 6;
 }
 
 message AnalysisResult {
-  string resultSummary = 1;
-  double computedAverage = 2;
+  string resultSummary = 1;        // texto legível para a UI
+  double computedAverage = 2;      // mantido por compatibilidade (== mean)
   string alertLevel = 3;
   string timestamp = 4;
+  // Resultados estruturados (não embebidos em strings)
+  double mean = 5;
+  double stdDev = 6;
+  double min = 7;
+  double max = 8;
+  int32 outliersCount = 9;
+  double trendSlope = 10;
+  string trend = 11;               // "Increasing" / "Stable" / "Decreasing"
+  double movingAverageLast = 12;
+  int32 sampleCount = 13;
 }
 
 message PredictionRequest {
   string type = 1;
   string zone = 2;
   int32 periodsToPredict = 3;
+  // Dados históricos a usar no modelo (preenchidos pelo cliente).
+  repeated Reading readings = 4;
+  // Estratégia de previsão: "linear" (default) ou "ewma".
+  string strategy = 5;
 }
 
 message PredictionResult {
   string predictionSummary = 1;
   string timestamp = 2;
+  repeated double forecast = 3;    // valores previstos, estruturados
+  string strategyUsed = 4;         // estratégia efetivamente usada
 }

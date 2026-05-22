@@ -1,200 +1,129 @@
+"""
+Serviço gRPC de Análise (porta 50052).
+
+Princípio de desenho: este serviço é *puro* — recebe os dados a analisar
+no próprio request (campo `readings`) e devolve resultados estatísticos.
+NÃO conhece a estrutura da base de dados do cliente (já não importa sqlite3).
+É o cliente (o Servidor) que recolhe as leituras dos seus stores e as envia.
+
+Implementação assente no ecossistema de análise de dados do Python:
+  - numpy        -> média, desvio padrão, mínimos/máximos, z-score
+  - pandas       -> médias móveis (rolling) e previsão EWMA (ewm)
+  - scikit-learn -> regressão linear (tendência e previsão linear)
+"""
+
 import os
 import sys
-import sqlite3
-import math
 import logging
 from datetime import datetime
 from concurrent import futures
 
 import grpc
+import numpy as np
+import pandas as pd
+from sklearn.linear_model import LinearRegression
 
-# Add current directory to path to ensure local stub imports work
+# Garantir que os stubs locais (gerados na própria pasta) são importáveis
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 import analysis_pb2
 import analysis_pb2_grpc
 
-# Configure logging
+# Configuração de logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
+    handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger("analysis_service")
 
 
-def get_db_path():
-    """
-    Determines the best path for the SQLite database.
-    """
-    db_env = os.environ.get("DB_PATH")
-    if db_env:
-        return db_env
-        
-    # Search in common paths
-    possible_paths = [
-        # local host path relative to services/analysis
-        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "data", "urbano.db")),
-        # docker mount path
-        "/app/data/urbano.db",
-        # fallback
-        "data/urbano.db"
-    ]
-    
-    for path in possible_paths:
-        if os.path.exists(path):
-            logger.info(f"Found database at path: {path}")
-            return path
-            
-    # Default fallback
-    logger.info(f"Using default database path: {possible_paths[0]}")
-    return possible_paths[0]
-
-
-def query_medicoes(db_path, reading_type=None, zone=None, sensor_id=None, date_from=None, date_to=None):
-    """
-    Queries medicoes from the SQLite database with filters.
-    """
-    if not os.path.exists(db_path):
-        logger.warning(f"Database file not found at {db_path}")
-        return []
-        
-    try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        
-        # Check if table exists
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='medicoes';")
-        if not cursor.fetchone():
-            logger.warning("Table 'medicoes' does not exist in the database.")
-            conn.close()
-            return []
-            
-        query = "SELECT valor, timestamp, sensor_id, zona, tipo_dado FROM medicoes WHERE 1=1"
-        params = []
-        
-        if reading_type and reading_type.strip():
-            query += " AND UPPER(tipo_dado) = ?"
-            params.append(reading_type.upper().strip())
-        if zone and zone.strip():
-            query += " AND UPPER(zona) = ?"
-            params.append(zone.upper().strip())
-        if sensor_id and sensor_id.strip():
-            query += " AND UPPER(sensor_id) = ?"
-            params.append(sensor_id.upper().strip())
-        if date_from and date_from.strip():
-            query += " AND timestamp >= ?"
-            params.append(date_from.strip())
-        if date_to and date_to.strip():
-            query += " AND timestamp <= ?"
-            params.append(date_to.strip())
-            
-        query += " ORDER BY timestamp ASC"
-        
-        cursor.execute(query, params)
-        rows = cursor.fetchall()
-        conn.close()
-        
-        return [{"value": r[0], "timestamp": r[1], "sensor_id": r[2], "zona": r[3], "type": r[4]} for r in rows]
-    except Exception as e:
-        logger.error(f"Error querying SQLite: {e}")
-        return []
-
+# ─────────────────────────────────────────────────────────────
+# Algoritmos de análise (operam sobre listas de valores recebidas)
+# ─────────────────────────────────────────────────────────────
 
 def compute_moving_averages(values, window_size=5):
     """
-    Computes moving averages for a list of numeric values.
+    Calcula médias móveis com janela `window_size` usando pandas.rolling.
+    Janelas parciais no início (min_periods=1), tal como na versão manual.
     """
-    n = len(values)
-    if n == 0:
+    if len(values) == 0:
         return []
-    if n < window_size:
-        avg = sum(values) / n
-        return [avg] * n
-        
-    moving_avgs = []
-    for i in range(n):
-        if i < window_size - 1:
-            # Partial window
-            subset = values[:i+1]
-        else:
-            subset = values[i - window_size + 1 : i + 1]
-        moving_avgs.append(sum(subset) / len(subset))
-    return moving_avgs
+    serie = pd.Series(values, dtype="float64")
+    return serie.rolling(window=window_size, min_periods=1).mean().tolist()
 
 
 def detect_outliers(values, threshold=2.0):
     """
-    Detects outliers in values using the standard Z-score.
-    Returns: (list of bools indicating if outlier, list of z-scores, outliers_count)
+    Deteta outliers via z-score (numpy). Usa desvio padrão amostral (ddof=1).
+    Devolve: (lista de bools, lista de z-scores, contagem de outliers)
     """
     n = len(values)
     if n < 2:
         return [False] * n, [0.0] * n, 0
-        
-    mean = sum(values) / n
-    variance = sum((x - mean) ** 2 for x in values) / (n - 1)
-    std_dev = math.sqrt(variance)
-    
+
+    arr = np.asarray(values, dtype="float64")
+    mean = float(np.mean(arr))
+    std_dev = float(np.std(arr, ddof=1))
+
     if std_dev == 0:
         return [False] * n, [0.0] * n, 0
-        
-    outliers = []
-    z_scores = []
-    outliers_count = 0
-    
-    for x in values:
-        z = (x - mean) / std_dev
-        z_scores.append(z)
-        is_out = abs(z) > threshold
-        outliers.append(is_out)
-        if is_out:
-            outliers_count += 1
-            
-    return outliers, z_scores, outliers_count
+
+    z_scores = (arr - mean) / std_dev
+    outliers = np.abs(z_scores) > threshold
+    return outliers.tolist(), z_scores.tolist(), int(np.count_nonzero(outliers))
 
 
 def analyze_trend(values):
     """
-    Performs a simple linear regression trend analysis where index is the independent variable.
-    Returns: (slope, intercept, trend_description)
+    Regressão linear (scikit-learn) onde o índice é a variável independente.
+    Devolve: (slope, intercept, descrição_da_tendência)
     """
     n = len(values)
     if n < 2:
-        return 0.0, 0.0, "Stable (Not enough data)"
-        
-    x_mean = (n - 1) / 2.0
-    y_mean = sum(values) / n
-    
-    num = 0.0
-    den = 0.0
-    for i, y in enumerate(values):
-        num += (i - x_mean) * (y - y_mean)
-        den += (i - x_mean) ** 2
-        
-    if den == 0:
-        return 0.0, y_mean, "Stable (No variance)"
-        
-    slope = num / den
-    intercept = y_mean - slope * x_mean
-    
-    # Classify slope
+        return 0.0, (float(values[0]) if n else 0.0), "Stable (Not enough data)"
+
+    x = np.arange(n).reshape(-1, 1)
+    y = np.asarray(values, dtype="float64")
+
+    model = LinearRegression()
+    model.fit(x, y)
+    slope = float(model.coef_[0])
+    intercept = float(model.intercept_)
+
     if abs(slope) < 0.005:
         trend = "Stable"
     elif slope > 0:
         trend = "Increasing"
     else:
         trend = "Decreasing"
-        
+
     return slope, intercept, trend
 
 
+def forecast_linear(values, periods):
+    """Previsão por extrapolação de uma regressão linear (scikit-learn)."""
+    n = len(values)
+    slope, intercept, trend = analyze_trend(values)
+    future_x = np.arange(n, n + periods)
+    forecast = (slope * future_x + intercept).tolist()
+    return forecast, slope, trend
+
+
+def forecast_ewma(values, periods, span=5):
+    """
+    Previsão por média móvel exponencialmente ponderada (pandas.ewm).
+    O último valor EWMA é projetado para os próximos períodos (passeio plano),
+    o que é típico de modelos de suavização exponencial simples.
+    """
+    serie = pd.Series(values, dtype="float64")
+    ewma_last = float(serie.ewm(span=span, adjust=False).mean().iloc[-1])
+    forecast = [ewma_last] * periods
+    return forecast, ewma_last
+
+
 def get_alert_level(reading_type, value):
-    """
-    Determines alert level (NORMAL, WARNING, CRITICAL) based on reading type and value.
-    """
+    """Determina o nível de alerta (NORMAL/WARNING/CRITICAL) por tipo e valor."""
     t = reading_type.upper().strip() if reading_type else ""
     if t == "TEMP":
         if value > 38.0 or value < -15.0:
@@ -225,130 +154,142 @@ def get_alert_level(reading_type, value):
     return "NORMAL"
 
 
+def _extract_values(readings):
+    """Extrai os valores numéricos das leituras recebidas no request."""
+    return [float(r.value) for r in readings]
+
+
+# ─────────────────────────────────────────────────────────────
+# Implementação do serviço gRPC
+# ─────────────────────────────────────────────────────────────
+
 class AnalysisServiceServicer(analysis_pb2_grpc.AnalysisServiceServicer):
     def Analyze(self, request, context):
         logger.info(
-            f"Analyze request received: type='{request.type}', zone='{request.zone}', "
-            f"sensorId='{request.sensorId}', dateFrom='{request.dateFrom}', dateTo='{request.dateTo}'"
+            f"Analyze request: type='{request.type}', zone='{request.zone}', "
+            f"sensorId='{request.sensorId}', readings={len(request.readings)}"
         )
-        
-        db_path = get_db_path()
-        data = query_medicoes(
-            db_path,
-            reading_type=request.type,
-            zone=request.zone,
-            sensor_id=request.sensorId,
-            date_from=request.dateFrom,
-            date_to=request.dateTo
-        )
-        
+
         timestamp_now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-        
-        if not data:
-            logger.info("No data found for the analysis request.")
+        values = _extract_values(request.readings)
+        n = len(values)
+
+        if n == 0:
+            logger.info("Nenhuma leitura recebida no request de análise.")
             return analysis_pb2.AnalysisResult(
-                resultSummary="No data found matching criteria in SQLite database.",
+                resultSummary="No readings provided in the request.",
                 computedAverage=0.0,
                 alertLevel="NORMAL",
-                timestamp=timestamp_now
+                timestamp=timestamp_now,
+                sampleCount=0,
             )
-            
-        values = [d["value"] for d in data]
-        n = len(values)
-        
-        # 1. Compute Average
-        avg = sum(values) / n
-        
-        # 2. Moving Averages
+
+        arr = np.asarray(values, dtype="float64")
+
+        # 1. Estatísticas básicas (numpy)
+        mean = float(np.mean(arr))
+        std_dev = float(np.std(arr, ddof=1)) if n > 1 else 0.0
+        v_min = float(np.min(arr))
+        v_max = float(np.max(arr))
+
+        # 2. Médias móveis (pandas)
         window = 5
         moving_avgs = compute_moving_averages(values, window_size=window)
-        moving_avg_str = f"Last moving avg ({window} periods): {moving_avgs[-1]:.2f}" if moving_avgs else "N/A"
-        
-        # 3. Z-score Outliers
+        moving_avg_last = float(moving_avgs[-1]) if moving_avgs else mean
+
+        # 3. Outliers por z-score (numpy)
         _, _, outliers_count = detect_outliers(values)
-        
-        # 4. Trend Analysis
+
+        # 4. Tendência por regressão linear (scikit-learn)
         slope, _, trend = analyze_trend(values)
-        
-        # 5. Alert Level
-        # Check last value for alert status
+
+        # 5. Nível de alerta com base no último valor
         last_val = values[-1]
-        alert_level = get_alert_level(request.type or data[0]["type"], last_val)
-        
+        reading_type = request.type or (request.readings[0].type if request.readings else "")
+        alert_level = get_alert_level(reading_type, last_val)
+
         summary = (
             f"Analyzed {n} readings of type '{request.type or 'ALL'}'. "
-            f"Mean: {avg:.2f}. "
+            f"Mean: {mean:.2f} (std={std_dev:.2f}, min={v_min:.2f}, max={v_max:.2f}). "
             f"Trend: {trend} (slope={slope:.4f}). "
-            f"Outliers: {outliers_count} detected (Z-score threshold 2.0). "
-            f"{moving_avg_str}. "
+            f"Outliers: {outliers_count} (Z-score threshold 2.0). "
+            f"Last moving avg ({window} periods): {moving_avg_last:.2f}. "
             f"Last value: {last_val:.2f}."
         )
-        
-        logger.info(f"Analyze finished. Summary: {summary}")
-        
+
+        logger.info(f"Analyze terminado: {summary}")
+
         return analysis_pb2.AnalysisResult(
             resultSummary=summary,
-            computedAverage=avg,
+            computedAverage=mean,
             alertLevel=alert_level,
-            timestamp=timestamp_now
+            timestamp=timestamp_now,
+            mean=mean,
+            stdDev=std_dev,
+            min=v_min,
+            max=v_max,
+            outliersCount=outliers_count,
+            trendSlope=slope,
+            trend=trend,
+            movingAverageLast=moving_avg_last,
+            sampleCount=n,
         )
 
     def Predict(self, request, context):
+        strategy = (request.strategy or "linear").lower().strip()
         logger.info(
-            f"Predict request received: type='{request.type}', zone='{request.zone}', "
-            f"periodsToPredict={request.periodsToPredict}"
+            f"Predict request: type='{request.type}', zone='{request.zone}', "
+            f"periods={request.periodsToPredict}, strategy='{strategy}', "
+            f"readings={len(request.readings)}"
         )
-        
-        db_path = get_db_path()
-        data = query_medicoes(
-            db_path,
-            reading_type=request.type,
-            zone=request.zone
-        )
-        
+
         timestamp_now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-        
-        if not data:
-            logger.info("No data found for predicting.")
-            return analysis_pb2.PredictionResult(
-                predictionSummary="No historical data found in SQLite database to train the forecast model.",
-                timestamp=timestamp_now
-            )
-            
-        values = [d["value"] for d in data]
+        values = _extract_values(request.readings)
         n = len(values)
-        
         periods = request.periodsToPredict if request.periodsToPredict > 0 else 5
-        
+
+        if n == 0:
+            logger.info("Nenhuma leitura histórica recebida para previsão.")
+            return analysis_pb2.PredictionResult(
+                predictionSummary="No historical readings provided to train the forecast model.",
+                timestamp=timestamp_now,
+                strategyUsed=strategy,
+            )
+
         if n < 2:
-            logger.warning("Not enough historical data points to fit regression line.")
-            val = values[0] if values else 0.0
+            val = values[0]
             forecast = [val] * periods
             summary = (
-                f"Prediction based on single data point. "
-                f"Forecast for next {periods} periods is constant: {forecast}. "
-                f"Cannot compute trend."
+                f"Prediction based on a single data point. "
+                f"Forecast for next {periods} periods is constant: {val:.2f}."
+            )
+            strategy_used = strategy
+        elif strategy == "ewma":
+            forecast, ewma_last = forecast_ewma(values, periods)
+            strategy_used = "ewma"
+            forecast_str = ", ".join(f"{f:.2f}" for f in forecast)
+            summary = (
+                f"EWMA (span=5) forecast on {n} historical points. "
+                f"Last EWMA value: {ewma_last:.2f}. "
+                f"Forecast for next {periods} periods: [{forecast_str}]."
             )
         else:
-            slope, intercept, trend = analyze_trend(values)
-            forecast = []
-            for step in range(periods):
-                pred_x = n + step
-                pred_y = slope * pred_x + intercept
-                forecast.append(pred_y)
-                
-            forecast_str = ", ".join([f"{f:.2f}" for f in forecast])
+            forecast, slope, trend = forecast_linear(values, periods)
+            strategy_used = "linear"
+            forecast_str = ", ".join(f"{f:.2f}" for f in forecast)
             summary = (
-                f"Trained linear regression model on {n} historical data points. "
+                f"Linear regression forecast on {n} historical points. "
                 f"Historical trend is {trend} (slope={slope:.4f}). "
-                f"Forecasted values for the next {periods} periods: [{forecast_str}]."
+                f"Forecast for next {periods} periods: [{forecast_str}]."
             )
-            
-        logger.info(f"Predict finished. Summary: {summary}")
-        
+
+        logger.info(f"Predict terminado: {summary}")
+
         return analysis_pb2.PredictionResult(
             predictionSummary=summary,
-            timestamp=timestamp_now
+            timestamp=timestamp_now,
+            forecast=forecast,
+            strategyUsed=strategy_used,
         )
 
 
@@ -359,9 +300,9 @@ def serve():
         AnalysisServiceServicer(), server
     )
     server.add_insecure_port(f"[::]:{port}")
-    logger.info(f"Starting Analysis Service gRPC server on port {port}...")
+    logger.info(f"A iniciar o Analysis Service gRPC na porta {port}...")
     server.start()
-    logger.info("Server started successfully. Awaiting requests...")
+    logger.info("Servidor iniciado com sucesso. A aguardar pedidos...")
     server.wait_for_termination()
 
 
