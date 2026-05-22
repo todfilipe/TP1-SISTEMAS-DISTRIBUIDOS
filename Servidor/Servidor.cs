@@ -1,6 +1,7 @@
 using Grpc.Net.Client;
 using Grpc.Core;
 using Analysis;
+using Microsoft.Extensions.Configuration;
 using Polly;
 using Polly.Retry;
 using System;
@@ -35,12 +36,15 @@ namespace Servidor
             "ativo", "manutencao", "desativado", "indisponivel", "desligado"
         };
 
-                // gRPC Analysis Service configuration
-        private static readonly string AnalysisServiceUrl = Environment.GetEnvironmentVariable("ANALYSIS_SERVICE_URL") ?? "http://localhost:50052";
+                // gRPC Analysis Service configuration.
+        // URL lido do appsettings.json; a variável de ambiente ANALYSIS_SERVICE_URL
+        // funciona como sobrescrita (override), tal como noutros componentes do projeto.
+        private static string AnalysisServiceUrl = CarregarAnalysisServiceUrl();
         private static GrpcChannel? _analysisChannel;
         private static AnalysisService.AnalysisServiceClient? _analysisClient;
 
         private static readonly List<AnalysisResult> HistoricoAnalises = new();
+        private static readonly List<PredictionResult> HistoricoPrevisoes = new();
         private static readonly object HistoricoLock = new();
 
         // Pipeline de resiliência Polly para chamadas gRPC ao serviço de Análise.
@@ -204,7 +208,9 @@ namespace Servidor
                         string zona = parts[2];
                         if (int.TryParse(parts[3], out int periodos))
                         {
-                            ExecutarPrevisao(tipo, zona, periodos);
+                            // Estratégia opcional como 5º argumento (linear|ewma).
+                            string strategy = parts.Length >= 5 ? NormalizarEstrategia(parts[4]) : "linear";
+                            ExecutarPrevisao(tipo, zona, periodos, strategy);
                         }
                         else
                         {
@@ -216,12 +222,15 @@ namespace Servidor
                         Console.WriteLine("\n--- Pedido de Previsão Interativo ---");
                         Console.Write("Introduza o Tipo de Sensor (ex: TEMP, HUM): ");
                         string? tipo = Console.ReadLine()?.Trim();
-                        
+
                         Console.Write("Introduza a Zona (ex: ZONA_CENTRO): ");
                         string? zona = Console.ReadLine()?.Trim();
 
                         Console.Write("Introduza o número de períodos a prever: ");
                         string? periodosStr = Console.ReadLine()?.Trim();
+
+                        Console.Write("Introduza a estratégia de previsão (linear | ewma) [linear]: ");
+                        string strategy = NormalizarEstrategia(Console.ReadLine()?.Trim());
 
                         if (string.IsNullOrEmpty(tipo) || string.IsNullOrEmpty(zona) || !int.TryParse(periodosStr, out int periodos))
                         {
@@ -229,7 +238,7 @@ namespace Servidor
                         }
                         else
                         {
-                            ExecutarPrevisao(tipo, zona, periodos);
+                            ExecutarPrevisao(tipo, zona, periodos, strategy);
                         }
                     }
                 }
@@ -243,6 +252,14 @@ namespace Servidor
                             var r = HistoricoAnalises[i];
                             Console.WriteLine($"[{i + 1}] Time: {r.Timestamp} | Avg: {r.ComputedAverage:F2} | Alert: {r.AlertLevel} | Summary: {r.ResultSummary}");
                         }
+                        Console.WriteLine("-------------------------------------------------------------------------");
+
+                        Console.WriteLine($"\n--- Histórico de Previsões Realizadas ({HistoricoPrevisoes.Count} registos) ---");
+                        for (int i = 0; i < HistoricoPrevisoes.Count; i++)
+                        {
+                            var p = HistoricoPrevisoes[i];
+                            Console.WriteLine($"[{i + 1}] Time: {p.Timestamp} | Estratégia: {p.StrategyUsed} | Forecast: [{string.Join(", ", p.Forecast)}] | Summary: {p.PredictionSummary}");
+                        }
                         Console.WriteLine("-------------------------------------------------------------------------\n");
                     }
                 }
@@ -252,7 +269,7 @@ namespace Servidor
                     Console.WriteLine("  sair       - Encerra o Servidor.");
                     Console.WriteLine("  analisar   - Inicia análise interativa.");
                     Console.WriteLine("  prever     - Inicia previsão interativa.");
-                    Console.WriteLine("  historico  - Mostra o histórico de análises em memória.");
+                    Console.WriteLine("  historico  - Mostra o histórico de análises e previsões em memória.");
                     Console.WriteLine("  ajuda      - Mostra esta lista de comandos.");
                     Console.WriteLine("----------------------------\n");
                 }
@@ -261,6 +278,20 @@ namespace Servidor
                     Console.WriteLine($"[Servidor] Comando desconhecido: '{cmd}'. Escreva 'ajuda' para ver a lista de comandos.");
                 }
             }
+        }
+
+        // Lê o URL do serviço de Análise a partir do appsettings.json (secção AnalysisService:Url),
+        // dando precedência à variável de ambiente ANALYSIS_SERVICE_URL como override.
+        private static string CarregarAnalysisServiceUrl()
+        {
+            var config = new ConfigurationBuilder()
+                .SetBasePath(AppDomain.CurrentDomain.BaseDirectory)
+                .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
+                .Build();
+
+            return Environment.GetEnvironmentVariable("ANALYSIS_SERVICE_URL")
+                ?? config["AnalysisService:Url"]
+                ?? "http://localhost:50052";
         }
 
         private static void InicializarClienteAnalise()
@@ -344,7 +375,14 @@ namespace Servidor
             }
         }
 
-        private void ExecutarPrevisao(string tipo, string zona, int periodos)
+        // Aceita apenas "linear" ou "ewma"; qualquer outro valor (ou vazio) recai em "linear".
+        private static string NormalizarEstrategia(string? input)
+        {
+            string s = (input ?? "").Trim().ToLower();
+            return s == "ewma" ? "ewma" : "linear";
+        }
+
+        private void ExecutarPrevisao(string tipo, string zona, int periodos, string strategy = "linear")
         {
             if (_analysisClient == null)
             {
@@ -357,7 +395,7 @@ namespace Servidor
                 Type = tipo ?? "",
                 Zone = zona ?? "",
                 PeriodsToPredict = periodos,
-                Strategy = "linear"
+                Strategy = strategy
             };
 
             // Recolher o histórico do store interno e enviá-lo no request.
@@ -388,12 +426,22 @@ namespace Servidor
                 Console.WriteLine("╠══════════════════════════════════════════════╣");
                 Console.WriteLine($"  Sumário: {response.PredictionSummary}");
                 Console.WriteLine("╚══════════════════════════════════════════════╝\n");
+
+                GuardarResultadoPrevisao(response, request);
             }
             catch (Exception ex)
             {
                 // Falha após todas as tentativas: regista e devolve um resultado de falha.
                 Console.WriteLine($"[ERRO gRPC] Falha ao executar previsão via gRPC após retentativas: {ex.Message}");
                 Console.WriteLine($"  Sumário: FALHA: serviço de Análise indisponível após 3 tentativas ({ex.Message}).");
+
+                var falha = new PredictionResult
+                {
+                    PredictionSummary = $"FALHA: serviço de Análise indisponível após 3 tentativas ({ex.Message}).",
+                    StrategyUsed = request.Strategy,
+                    Timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+                };
+                GuardarResultadoPrevisao(falha, request);
             }
         }
 
@@ -423,6 +471,35 @@ namespace Servidor
             catch (Exception ex)
             {
                 Console.WriteLine($"[ERRO] Falha ao guardar resultado da análise no ficheiro: {ex.Message}");
+            }
+        }
+
+        private void GuardarResultadoPrevisao(PredictionResult result, PredictionRequest request)
+        {
+            lock (HistoricoLock)
+            {
+                HistoricoPrevisoes.Add(result);
+            }
+
+            try
+            {
+                string logFile = "prediction_history.log";
+                using (var writer = new StreamWriter(logFile, append: true, System.Text.Encoding.UTF8))
+                {
+                    writer.WriteLine($"=== PREVISAO EFECTUADA EM {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC ===");
+                    writer.WriteLine($"Request - Tipo: {request.Type}, Zona: {request.Zone}, Periodos: {request.PeriodsToPredict}, Estrategia: {request.Strategy}");
+                    writer.WriteLine($"Result  - Summary: {result.PredictionSummary}");
+                    writer.WriteLine($"Result  - Strategy Used: {result.StrategyUsed}");
+                    writer.WriteLine($"Result  - Forecast: {string.Join(", ", result.Forecast)}");
+                    writer.WriteLine($"Result  - Timestamp: {result.Timestamp}");
+                    writer.WriteLine("==================================================");
+                    writer.WriteLine();
+                }
+                Console.WriteLine($"[Servidor] Resultado da previsão guardado em '{logFile}' e em memória.");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ERRO] Falha ao guardar resultado da previsão no ficheiro: {ex.Message}");
             }
         }
 

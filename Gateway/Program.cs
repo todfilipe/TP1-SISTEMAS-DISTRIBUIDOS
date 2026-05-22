@@ -255,9 +255,15 @@ namespace Gateway
                     arguments: null
                 );
 
-                // Criar fila exclusiva do gateway
-                var queueDeclareResult = rabbitChannel.QueueDeclare();
-                string queueName = queueDeclareResult.QueueName;
+                // Criar fila nomeada e durável do gateway (sobrevive a reinícios e acumula mensagens)
+                string queueName = $"gateway.{gatewayId}";
+                rabbitChannel.QueueDeclare(
+                    queue: queueName,
+                    durable: true,
+                    exclusive: false,
+                    autoDelete: false,
+                    arguments: null
+                );
 
                 // Definir bindings
                 List<string> bindings = new List<string>();
@@ -302,6 +308,10 @@ namespace Gateway
                     rabbitChannel.QueueBind(queueName, rabbitExchangeName, binding);
                     Console.WriteLine($"[GATEWAY] Fila vinculada ao padrão: '{binding}' no exchange '{rabbitExchangeName}'");
                 }
+
+                // Limitar o número de mensagens não confirmadas entregues por consumidor
+                // (prefetch), evitando sobrecarga do Gateway quando o gRPC está lento.
+                rabbitChannel.BasicQos(prefetchSize: 0, prefetchCount: 10, global: false);
 
                 var consumer = new EventingBasicConsumer(rabbitChannel);
                 consumer.Received += (model, ea) =>
