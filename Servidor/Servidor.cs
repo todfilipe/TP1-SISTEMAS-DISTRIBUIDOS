@@ -1,11 +1,17 @@
 using Grpc.Net.Client;
 using Grpc.Core;
 using Analysis;
+using Google.Protobuf;
 using Microsoft.Extensions.Configuration;
+using MongoDB.Bson;
 using Polly;
 using Polly.Retry;
+using Servidor.Mongo;
+using Servidor.Mongo.Models;
+using Servidor.Mongo.Repositories;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -23,6 +29,10 @@ namespace Servidor
     {
         private readonly int _porta;
         private readonly DataStore _dataStore;
+        private readonly ReadingsRepository? _readingsRepository;
+        private readonly AnalysesRepository? _analysesRepository;
+        private readonly SensorsMetadataRepository? _sensorsMetadataRepository;
+        private readonly CliHandler _cliHandler;
         private TcpListener? _listener;
         private volatile bool _running;
 
@@ -77,6 +87,32 @@ namespace Servidor
         {
             _porta = porta;
             _dataStore = new DataStore();
+            (_, _readingsRepository, _analysesRepository, _sensorsMetadataRepository) = InicializarMongo();
+            _cliHandler = new CliHandler(this);
+        }
+
+        internal int Porta => _porta;
+
+        internal bool IsRunning => _running;
+
+        internal ReadingsRepository? ReadingsRepository => _readingsRepository;
+
+        internal AnalysesRepository? AnalysesRepository => _analysesRepository;
+
+        internal SensorsMetadataRepository? SensorsMetadataRepository => _sensorsMetadataRepository;
+
+        internal void Stop()
+        {
+            _running = false;
+            _listener?.Stop();
+        }
+
+        internal (IReadOnlyList<AnalysisResult> Analises, IReadOnlyList<PredictionResult> Previsoes) ObterHistorico()
+        {
+            lock (HistoricoLock)
+            {
+                return (HistoricoAnalises.ToList(), HistoricoPrevisoes.ToList());
+            }
         }
 
         /// <summary>
@@ -89,6 +125,8 @@ namespace Servidor
             _listener.Start();
             _running = true;
 
+#if false
+
             Console.WriteLine("╔══════════════════════════════════════════════╗");
             Console.WriteLine("║   SERVIDOR — Monitorização Urbana One Health ║");
             Console.WriteLine("╠══════════════════════════════════════════════╣");
@@ -96,8 +134,11 @@ namespace Servidor
             Console.WriteLine("╚══════════════════════════════════════════════╝");
             Console.WriteLine();
 
+#endif
+            _cliHandler.ShowBanner();
+
             // Thread para input do utilizador (comando de encerramento)
-            Thread inputThread = new Thread(LerInput);
+            Thread inputThread = new Thread(_cliHandler.Run);
             inputThread.IsBackground = true;
             inputThread.Start();
 
@@ -141,6 +182,7 @@ namespace Servidor
         /// <summary>
         /// Lê input do utilizador para comandos do servidor (ex: "sair").
         /// </summary>
+#if false
         private void LerInput()
         {
             while (_running)
@@ -282,6 +324,7 @@ namespace Servidor
 
         // Lê o URL do serviço de Análise a partir do appsettings.json (secção AnalysisService:Url),
         // dando precedência à variável de ambiente ANALYSIS_SERVICE_URL como override.
+#endif
         private static string CarregarAnalysisServiceUrl()
         {
             var config = new ConfigurationBuilder()
@@ -308,12 +351,41 @@ namespace Servidor
             }
         }
 
-        private void ExecutarAnalise(string tipo, string zona, string sensorId, string dateFrom, string dateTo)
+        private static (MongoDbContext? Context, ReadingsRepository? Readings, AnalysesRepository? Analyses, SensorsMetadataRepository? SensorsMetadata) InicializarMongo()
+        {
+            try
+            {
+                var context = new MongoDbContext();
+                var readings = new ReadingsRepository(context);
+                var analyses = new AnalysesRepository(context);
+                var sensorsMetadata = new SensorsMetadataRepository(context);
+
+                try
+                {
+                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                    context.Database.RunCommand<BsonDocument>(new BsonDocument("ping", 1), cancellationToken: cts.Token);
+                    Console.WriteLine($"[Servidor][MongoDB] Repositórios inicializados para a base de dados '{context.DatabaseName}'.");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[AVISO][MongoDB] MongoDB indisponível no arranque: {ex.Message}. SQLite continua ativo.");
+                }
+
+                return (context, readings, analyses, sensorsMetadata);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[AVISO][MongoDB] Repositórios MongoDB desativados: {ex.Message}. SQLite continua ativo.");
+                return (null, null, null, null);
+            }
+        }
+
+        internal AnalysisResult? ExecutarAnalise(string tipo, string zona, string sensorId, string dateFrom, string dateTo)
         {
             if (_analysisClient == null)
             {
                 Console.WriteLine("[ERRO] Cliente gRPC de Análise não está inicializado.");
-                return;
+                return null;
             }
 
             var request = new AnalysisRequest
@@ -346,6 +418,7 @@ namespace Servidor
             {
                 // Envolver a chamada gRPC no pipeline Polly (retry exponencial 1/2/4s).
                 AnalysisResult response = _grpcPipeline.Execute(() => _analysisClient.Analyze(request));
+#if false
 
                 Console.WriteLine("\n╔══════════════════════════════════════════════╗");
                 Console.WriteLine("║            RESULTADO DA ANÁLISE              ║");
@@ -357,7 +430,10 @@ namespace Servidor
                 Console.WriteLine($"  Sumário: {response.ResultSummary}");
                 Console.WriteLine("╚══════════════════════════════════════════════╝\n");
 
+#endif
                 GuardarResultadoAnalise(response, request);
+                PersistirAnaliseMongoFireAndForget(response, request);
+                return response;
             }
             catch (Exception ex)
             {
@@ -372,22 +448,23 @@ namespace Servidor
                     Timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
                 };
                 GuardarResultadoAnalise(falha, request);
+                return falha;
             }
         }
 
         // Aceita apenas "linear" ou "ewma"; qualquer outro valor (ou vazio) recai em "linear".
-        private static string NormalizarEstrategia(string? input)
+        internal static string NormalizarEstrategia(string? input)
         {
             string s = (input ?? "").Trim().ToLower();
             return s == "ewma" ? "ewma" : "linear";
         }
 
-        private void ExecutarPrevisao(string tipo, string zona, int periodos, string strategy = "linear")
+        internal PredictionResult? ExecutarPrevisao(string tipo, string zona, int periodos, string strategy = "linear")
         {
             if (_analysisClient == null)
             {
                 Console.WriteLine("[ERRO] Cliente gRPC de Análise não está inicializado.");
-                return;
+                return null;
             }
 
             var request = new PredictionRequest
@@ -417,6 +494,7 @@ namespace Servidor
             try
             {
                 PredictionResult response = _grpcPipeline.Execute(() => _analysisClient.Predict(request));
+#if false
 
                 Console.WriteLine("\n╔══════════════════════════════════════════════╗");
                 Console.WriteLine("║            RESULTADO DA PREVISÃO             ║");
@@ -427,7 +505,9 @@ namespace Servidor
                 Console.WriteLine($"  Sumário: {response.PredictionSummary}");
                 Console.WriteLine("╚══════════════════════════════════════════════╝\n");
 
+#endif
                 GuardarResultadoPrevisao(response, request);
+                return response;
             }
             catch (Exception ex)
             {
@@ -442,6 +522,7 @@ namespace Servidor
                     Timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
                 };
                 GuardarResultadoPrevisao(falha, request);
+                return falha;
             }
         }
 
@@ -472,6 +553,161 @@ namespace Servidor
             {
                 Console.WriteLine($"[ERRO] Falha ao guardar resultado da análise no ficheiro: {ex.Message}");
             }
+        }
+
+        private void PersistirLeituraMongoFireAndForget(
+            string sensorId,
+            string tipoDado,
+            string valor,
+            string zona,
+            string timestamp,
+            string gatewayId,
+            string mensagemOriginal)
+        {
+            if (_readingsRepository == null || _sensorsMetadataRepository == null)
+            {
+                return;
+            }
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    if (!double.TryParse(valor, NumberStyles.Any, CultureInfo.InvariantCulture, out double valorNumerico))
+                    {
+                        Console.WriteLine($"[ERRO][MongoDB] Valor inválido para persistência MongoDB: {valor}");
+                        return;
+                    }
+
+                    DateTime timestampUtc = ParseDateTimeOrUtcNow(timestamp);
+
+                    var reading = new ReadingDocument
+                    {
+                        SensorId = sensorId,
+                        Zone = zona,
+                        Type = tipoDado,
+                        Value = valorNumerico,
+                        Unit = InferirUnidade(tipoDado),
+                        Timestamp = timestampUtc,
+                        GatewayId = gatewayId,
+                        OriginalMessageFormat = mensagemOriginal,
+                        CreatedAt = DateTime.UtcNow
+                    };
+
+                    await _readingsRepository.InsertAsync(reading);
+                    await _sensorsMetadataRepository.UpsertObservationAsync(sensorId, zona, tipoDado, timestampUtc);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[ERRO][MongoDB] Falha ao persistir leitura no MongoDB: {ex.Message}");
+                }
+            });
+        }
+
+        private void PersistirAnaliseMongoFireAndForget(AnalysisResult result, AnalysisRequest request)
+        {
+            if (_analysesRepository == null)
+            {
+                return;
+            }
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    DateTime windowStart = ResolveWindowBoundary(request.DateFrom, request.Readings.Select(r => r.Timestamp), useMinimum: true);
+                    DateTime windowEnd = ResolveWindowBoundary(request.DateTo, request.Readings.Select(r => r.Timestamp), useMinimum: false);
+
+                    var analysis = new AnalysisDocument
+                    {
+                        SensorId = string.IsNullOrWhiteSpace(request.SensorId) ? null : request.SensorId,
+                        Zone = request.Zone,
+                        Type = request.Type,
+                        WindowStart = windowStart,
+                        WindowEnd = windowEnd,
+                        Average = result.Mean != 0 ? result.Mean : result.ComputedAverage,
+                        StandardDeviation = result.StdDev,
+                        Median = CalcularMediana(request.Readings.Select(r => r.Value)),
+                        OutlierCount = result.OutliersCount,
+                        TrendClassification = result.Trend,
+                        CreatedAt = DateTime.UtcNow,
+                        RawGrpcResultSerialized = JsonFormatter.Default.Format(result)
+                    };
+
+                    await _analysesRepository.InsertAsync(analysis);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[ERRO][MongoDB] Falha ao persistir análise no MongoDB: {ex.Message}");
+                }
+            });
+        }
+
+        private static DateTime ResolveWindowBoundary(string candidate, IEnumerable<string> readingTimestamps, bool useMinimum)
+        {
+            if (!string.IsNullOrWhiteSpace(candidate) && TryParseUtc(candidate, out DateTime parsedCandidate))
+            {
+                return parsedCandidate;
+            }
+
+            var parsedReadings = readingTimestamps
+                .Where(ts => TryParseUtc(ts, out _))
+                .Select(ParseDateTimeOrUtcNow)
+                .ToList();
+
+            if (parsedReadings.Count == 0)
+            {
+                return DateTime.UtcNow;
+            }
+
+            return useMinimum ? parsedReadings.Min() : parsedReadings.Max();
+        }
+
+        private static DateTime ParseDateTimeOrUtcNow(string value)
+        {
+            return TryParseUtc(value, out DateTime parsed) ? parsed : DateTime.UtcNow;
+        }
+
+        private static bool TryParseUtc(string value, out DateTime parsed)
+        {
+            return DateTime.TryParse(
+                value,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                out parsed);
+        }
+
+        private static double CalcularMediana(IEnumerable<double> values)
+        {
+            var ordered = values.OrderBy(value => value).ToList();
+            if (ordered.Count == 0)
+            {
+                return 0.0;
+            }
+
+            int middle = ordered.Count / 2;
+            if (ordered.Count % 2 == 1)
+            {
+                return ordered[middle];
+            }
+
+            return (ordered[middle - 1] + ordered[middle]) / 2.0;
+        }
+
+        private static string InferirUnidade(string tipoDado)
+        {
+            return tipoDado.ToUpperInvariant() switch
+            {
+                "TEMP" => "C",
+                "HUM" => "%",
+                "AR" => "AQI",
+                "RUIDO" => "dB",
+                "PM2.5" => "ug/m3",
+                "PM10" => "ug/m3",
+                "LUZ" => "lux",
+                "VIDEO" => "frame",
+                _ => string.Empty
+            };
         }
 
         private void GuardarResultadoPrevisao(PredictionResult result, PredictionRequest request)
@@ -681,6 +917,7 @@ namespace Servidor
             switch (resultado)
             {
                 case ResultadoArmazenamento.Sucesso:
+                    PersistirLeituraMongoFireAndForget(sensorId, tipoDado, valor, zona, timestamp, gatewayId, string.Join(' ', partes));
                     return "OK";
                 case ResultadoArmazenamento.ErroStorage:
                     return "ERR_STORAGE_FULL";
@@ -713,6 +950,7 @@ namespace Servidor
             switch (resultado)
             {
                 case ResultadoArmazenamento.Sucesso:
+                    PersistirLeituraMongoFireAndForget("AGREGADO_" + gatewayId, tipoDado, valor, zona, timestamp, gatewayId, string.Join(' ', partes));
                     return "OK";
                 case ResultadoArmazenamento.ErroStorage:
                     return "ERR_STORAGE_FULL";
