@@ -25,7 +25,7 @@ public class SensorClient : IDisposable
 
     private readonly string _sensorId;
     private readonly string _gatewayHost;
-    private readonly int _gatewayPort;
+    private readonly int _rabbitPort;
     private string _zone;
     private readonly string _type;
     private readonly int _intervalSeconds;
@@ -57,6 +57,7 @@ public class SensorClient : IDisposable
     public bool IsTypesRegistered => _typesRegistered;
     public bool IsOperational => _connected && _typesRegistered;
     public string PayloadFormat => _payloadFormat;
+    public int RabbitPort => _rabbitPort;
 
     public static string NormalizePayloadFormat(string? payloadFormat)
     {
@@ -70,7 +71,7 @@ public class SensorClient : IDisposable
     public SensorClient(
         string sensorId, 
         string gatewayHost, 
-        int gatewayPort, 
+        int rabbitPort, 
         string zone, 
         string type, 
         int intervalSeconds,
@@ -81,7 +82,7 @@ public class SensorClient : IDisposable
     {
         _sensorId = sensorId;
         _gatewayHost = gatewayHost;
-        _gatewayPort = gatewayPort;
+        _rabbitPort = rabbitPort;
         _zone = zone;
         _type = type;
         _intervalSeconds = intervalSeconds;
@@ -90,27 +91,24 @@ public class SensorClient : IDisposable
         _rabbitVHost = rabbitVHost;
         _payloadFormat = NormalizePayloadFormat(payloadFormat);
 
-        _connectionFactory = new ConnectionFactory()
-        {
-            HostName = _gatewayHost,
-            Port = 5672, // Usar porto AMQP padrão do RabbitMQ
-            UserName = _rabbitUser,
-            Password = _rabbitPass,
-            VirtualHost = _rabbitVHost
-        };
+        _connectionFactory = CreateConnectionFactory();
     }
 
     /// <summary>
     /// Construtor compatível com a CLI interativa original.
     /// </summary>
-    public SensorClient(string sensorId, string gatewayHost, int gatewayPort = 8080)
-        : this(sensorId, gatewayHost, gatewayPort, "ZONA_CENTRO", "TEMP", 5)
+    public SensorClient(string sensorId, string gatewayHost, int rabbitPort = 5672)
+        : this(sensorId, gatewayHost, rabbitPort, "ZONA_CENTRO", "TEMP", 5)
     {
         _zone = DiscoverZone();
-        _connectionFactory = new ConnectionFactory()
+    }
+
+    private ConnectionFactory CreateConnectionFactory()
+    {
+        return new ConnectionFactory()
         {
             HostName = _gatewayHost,
-            Port = 5672,
+            Port = _rabbitPort,
             UserName = _rabbitUser,
             Password = _rabbitPass,
             VirtualHost = _rabbitVHost
@@ -140,7 +138,7 @@ public class SensorClient : IDisposable
             if (_isReconnecting) return false;
             _isReconnecting = true;
 
-            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss}] [RABBITMQ] Ligação perdida ou indisponível. A iniciar tentativas de ligação...");
+            Console.WriteLine($"\n[{DateTime.Now:HH:mm:ss}] [RABBITMQ] Ligação perdida ou indisponível. A iniciar tentativas de ligação para {_gatewayHost}:{_rabbitPort}...");
 
             int delayMs = 2000; // Atraso inicial de 2 segundos
             const int maxDelayMs = 30000; // Atraso máximo de 30 segundos
@@ -151,7 +149,7 @@ public class SensorClient : IDisposable
                 try
                 {
                     attempts++;
-                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [RABBITMQ] Tentativa {attempts} de ligação ao RabbitMQ...");
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [RABBITMQ] Tentativa {attempts} de ligação ao RabbitMQ em {_gatewayHost}:{_rabbitPort}...");
 
                     // Libertar recursos antigos
                     try { _rabbitChannel?.Dispose(); } catch { }
