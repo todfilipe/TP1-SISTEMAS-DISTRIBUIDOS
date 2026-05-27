@@ -61,12 +61,13 @@ def test_parse_xml():
 
 
 def test_parse_csv():
-    # sensorId, type, value, unit, timestamp
-    payload = "S3,TEMP,18.5,C,2026-01-01T00:00:00"
+    # sensorId, type, value, unit, timestamp, zone
+    payload = "S3,TEMP,18.5,C,2026-01-01T00:00:00,ZONA_CENTRO"
     resp = _normalize(rawFormat=payload)
     assert resp.sensorId == "S3"
     assert resp.type == "TEMP"
     assert abs(resp.value - 18.5) < 0.001
+    assert resp.zone == "ZONA_CENTRO"
 
 
 def test_rejeita_valor_fora_de_range():

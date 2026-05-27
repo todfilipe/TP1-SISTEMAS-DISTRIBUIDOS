@@ -663,8 +663,9 @@ namespace Gateway
                 {
                     // Trata-se de dados (TEMP, HUM, etc.)
                     // Validação completa usando DataValidator
+                    string validationRaw = BuildTp1RawMessage(msg);
                     DataValidationResult validationResult =
-                        DataValidator.ValidateAndProcessData(msg.raw, sensorId, configManager, null);
+                        DataValidator.ValidateAndProcessData(validationRaw, sensorId, configManager, null);
 
                     Console.WriteLine(validationResult.LogMessage);
 
@@ -696,6 +697,8 @@ namespace Gateway
                     double valorOriginal = msg.value;
                     // A zona vem da mensagem do sensor; se vazia, usar a configurada no sensors.csv
                     string zonaLeitura = !string.IsNullOrEmpty(msg.zone) ? msg.zone : sensor.Zona;
+                    string payloadFormat = string.IsNullOrWhiteSpace(msg.rawFormat) ? "UNKNOWN" : msg.rawFormat.ToUpperInvariant();
+                    Console.WriteLine($"[GATEWAY gRPC] A normalizar payload rawFormat={payloadFormat} do sensor '{sensorId}'.");
                     var normalized = NormalizeReading(sensorId, type, valorOriginal, msg.unit, msg.timestamp, msg.raw, zonaLeitura);
 
                     if (normalized == null)
@@ -907,6 +910,12 @@ namespace Gateway
                 return null;
             }
         }
+
+        static string BuildTp1RawMessage(SensorMessage msg)
+        {
+            string value = msg.value.ToString(CultureInfo.InvariantCulture);
+            return $"DATA {msg.type} {value} {msg.zone} {msg.timestamp}";
+        }
     }
 
     public class SensorMessage
@@ -918,5 +927,6 @@ namespace Gateway
         public string unit { get; set; }
         public string timestamp { get; set; }
         public string raw { get; set; }
+        public string rawFormat { get; set; } = "";
     }
 }

@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Globalization;
 using System.Net.Sockets;
+using System.Security;
 using System.Text.Json;
 using System.Threading;
 using RabbitMQ.Client;
@@ -30,6 +32,7 @@ public class SensorClient : IDisposable
     private readonly string _rabbitUser;
     private readonly string _rabbitPass;
     private readonly string _rabbitVHost;
+    private readonly string _payloadFormat;
 
     private bool _connected;
     private bool _typesRegistered;
@@ -53,6 +56,13 @@ public class SensorClient : IDisposable
     public bool IsConnected => _connected;
     public bool IsTypesRegistered => _typesRegistered;
     public bool IsOperational => _connected && _typesRegistered;
+    public string PayloadFormat => _payloadFormat;
+
+    public static string NormalizePayloadFormat(string? payloadFormat)
+    {
+        string normalized = (payloadFormat ?? "JSON").Trim().ToUpperInvariant();
+        return normalized is "JSON" or "XML" or "CSV" ? normalized : "JSON";
+    }
 
     /// <summary>
     /// Construtor principal para inicialização automática via appsettings.json.
@@ -66,7 +76,8 @@ public class SensorClient : IDisposable
         int intervalSeconds,
         string rabbitUser = "admin",
         string rabbitPass = "admin",
-        string rabbitVHost = "onehealth")
+        string rabbitVHost = "onehealth",
+        string payloadFormat = "JSON")
     {
         _sensorId = sensorId;
         _gatewayHost = gatewayHost;
@@ -77,6 +88,7 @@ public class SensorClient : IDisposable
         _rabbitUser = rabbitUser;
         _rabbitPass = rabbitPass;
         _rabbitVHost = rabbitVHost;
+        _payloadFormat = NormalizePayloadFormat(payloadFormat);
 
         _connectionFactory = new ConnectionFactory()
         {
@@ -226,21 +238,24 @@ public class SensorClient : IDisposable
         timestamp ??= DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss");
 
         double valDouble = 0;
-        double.TryParse(valor, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out valDouble);
+        double.TryParse(valor, NumberStyles.Float, CultureInfo.InvariantCulture, out valDouble);
+        string unit = GetUnitForType(tipo);
 
         lock (_sendLock)
         {
             try
             {
+                string rawPayload = BuildRawPayload(tipo, valDouble, unit, zona, timestamp);
                 var msg = new SensorMessage
                 {
                     sensorId = _sensorId,
                     zone = zona,
                     type = tipo,
                     value = valDouble,
-                    unit = GetUnitForType(tipo),
+                    unit = unit,
                     timestamp = timestamp,
-                    raw = $"DATA {tipo} {valor} {zona} {timestamp}"
+                    raw = rawPayload,
+                    rawFormat = _payloadFormat
                 };
 
                 string json = JsonSerializer.Serialize(msg);
@@ -286,7 +301,8 @@ public class SensorClient : IDisposable
                     value = 0,
                     unit = "n/a",
                     timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss"),
-                    raw = $"HEARTBEAT {_sensorId}"
+                    raw = $"HEARTBEAT {_sensorId}",
+                    rawFormat = "TEXT"
                 };
 
                 string json = JsonSerializer.Serialize(msg);
@@ -371,6 +387,7 @@ public class SensorClient : IDisposable
             Console.WriteLine($"║   Zona:      {_zone,-31} ║");
             Console.WriteLine($"║   Tipo:      {_type,-31} ║");
             Console.WriteLine($"║   Intervalo: {_intervalSeconds + " segundos",-31} ║");
+            Console.WriteLine($"║   Payload:   {_payloadFormat,-31} ║");
             Console.WriteLine($"╚══════════════════════════════════════════════╝");
             Console.WriteLine();
 
@@ -389,6 +406,7 @@ public class SensorClient : IDisposable
                     if (resp == "OK")
                     {
                         Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [DATA SENT] {_zone}.{_type}.{_sensorId} -> {valStr} {GetUnitForType(_type)}");
+                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [PAYLOAD] rawFormat={_payloadFormat}");
                     }
                     else
                     {
@@ -506,7 +524,8 @@ public class SensorClient : IDisposable
                         value = 0,
                         unit = "n/a",
                         timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss"),
-                        raw = $"DISCONNECT {_sensorId}"
+                        raw = $"DISCONNECT {_sensorId}",
+                        rawFormat = "TEXT"
                     };
 
                     string json = JsonSerializer.Serialize(msg);
@@ -613,6 +632,71 @@ public class SensorClient : IDisposable
         };
     }
 
+    private string BuildRawPayload(string tipo, double valor, string unit, string zona, string timestamp)
+    {
+        return _payloadFormat switch
+        {
+            "XML" => BuildXmlPayload(tipo, valor, unit, zona, timestamp),
+            "CSV" => BuildCsvPayload(tipo, valor, unit, zona, timestamp),
+            _ => BuildJsonPayload(tipo, valor, unit, zona, timestamp)
+        };
+    }
+
+    private string BuildJsonPayload(string tipo, double valor, string unit, string zona, string timestamp)
+    {
+        return JsonSerializer.Serialize(new
+        {
+            sensorId = _sensorId,
+            zone = zona,
+            type = tipo,
+            value = valor,
+            unit,
+            timestamp
+        });
+    }
+
+    private string BuildXmlPayload(string tipo, double valor, string unit, string zona, string timestamp)
+    {
+        string value = valor.ToString(CultureInfo.InvariantCulture);
+        return "<reading>"
+            + $"<sensorId>{EscapeXml(_sensorId)}</sensorId>"
+            + $"<zone>{EscapeXml(zona)}</zone>"
+            + $"<type>{EscapeXml(tipo)}</type>"
+            + $"<value>{EscapeXml(value)}</value>"
+            + $"<unit>{EscapeXml(unit)}</unit>"
+            + $"<timestamp>{EscapeXml(timestamp)}</timestamp>"
+            + "</reading>";
+    }
+
+    private string BuildCsvPayload(string tipo, double valor, string unit, string zona, string timestamp)
+    {
+        string value = valor.ToString(CultureInfo.InvariantCulture);
+        return string.Join(",", new[]
+        {
+            EscapeCsv(_sensorId),
+            EscapeCsv(tipo),
+            EscapeCsv(value),
+            EscapeCsv(unit),
+            EscapeCsv(timestamp),
+            EscapeCsv(zona)
+        });
+    }
+
+    private static string EscapeXml(string value)
+    {
+        return SecurityElement.Escape(value) ?? string.Empty;
+    }
+
+    private static string EscapeCsv(string value)
+    {
+        if (value.Contains(',') || value.Contains('"') || value.Contains('\n') || value.Contains('\r'))
+        {
+            return "\"" + value.Replace("\"", "\"\"") + "\"";
+        }
+
+        return value;
+    }
+
     public void Dispose()
     {
         StopAutomaticPublishing();
@@ -646,4 +730,5 @@ public class SensorMessage
     public string unit { get; set; } = null!;
     public string timestamp { get; set; } = null!;
     public string raw { get; set; } = null!;
+    public string rawFormat { get; set; } = null!;
 }

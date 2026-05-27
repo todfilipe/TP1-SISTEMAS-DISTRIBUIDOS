@@ -42,7 +42,7 @@ def parse_raw_format(raw_format_str):
     if s.startswith('{'):
         try:
             data = json.loads(s)
-            logger.info("Successfully parsed JSON payload from rawFormat")
+            logger.info("Detected rawFormat payload as JSON")
             return {
                 'sensorId': data.get('sensorId') or data.get('sensor_id'),
                 'type': data.get('type'),
@@ -77,7 +77,7 @@ def parse_raw_format(raw_format_str):
                     mapped['value'] = float(mapped['value'])
                 except ValueError:
                     pass
-            logger.info("Successfully parsed XML payload from rawFormat")
+            logger.info("Detected rawFormat payload as XML")
             return mapped
         except Exception as e:
             logger.debug(f"XML parsing failed: {e}")
@@ -100,6 +100,8 @@ def parse_raw_format(raw_format_str):
                         pass
                     mapped['unit'] = row[3]
                     mapped['timestamp'] = row[4]
+                    if len(row) >= 6:
+                        mapped['zone'] = row[5]
                 # 3 elements: type, value, unit
                 elif len(row) == 3:
                     mapped['type'] = row[0]
@@ -116,7 +118,7 @@ def parse_raw_format(raw_format_str):
                         pass
                     mapped['unit'] = row[1]
                 
-                logger.info(f"Successfully parsed CSV payload ({len(row)} cols) from rawFormat")
+                logger.info(f"Detected rawFormat payload as CSV ({len(row)} cols)")
                 return mapped
         except Exception as e:
             logger.debug(f"CSV parsing failed: {e}")

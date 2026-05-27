@@ -38,6 +38,7 @@ class Program
         string zone = "ZONA_CENTRO";
         string type = "TEMP";
         int intervalSeconds = 5;
+        string payloadFormat = "JSON";
 
         if (isCustomAuto)
         {
@@ -58,8 +59,11 @@ class Program
                 rabbitUser = config["RabbitMQ:UserName"] ?? rabbitUser;
                 rabbitPass = config["RabbitMQ:Password"] ?? rabbitPass;
                 rabbitVHost = config["RabbitMQ:VirtualHost"] ?? rabbitVHost;
+                payloadFormat = config["Sensor:PayloadFormat"] ?? payloadFormat;
             }
             catch {}
+
+            if (args.Length >= 6) payloadFormat = args[5];
         }
         else
         {
@@ -93,6 +97,7 @@ class Program
             zone = config["Sensor:Zone"] ?? zone;
             type = config["Sensor:Type"] ?? type;
             intervalSeconds = int.TryParse(config["Sensor:IntervalSeconds"], out int sec) ? sec : intervalSeconds;
+            payloadFormat = config["Sensor:PayloadFormat"] ?? payloadFormat;
         }
 
         // Criar e iniciar o cliente automático
@@ -105,12 +110,13 @@ class Program
             intervalSeconds,
             rabbitUser,
             rabbitPass,
-            rabbitVHost
+            rabbitVHost,
+            payloadFormat
         );
 
         // Iniciar ligação inicial
         Console.WriteLine($"[SENSOR] A ligar ao RabbitMQ em {rabbitHost}:{rabbitPort}...");
-        Console.WriteLine($"[SENSOR AUTOMÁTICO] ID: {sensorId}, Zona: {zone}, Tipo: {type}, Intervalo: {intervalSeconds}s");
+        Console.WriteLine($"[SENSOR AUTOMÁTICO] ID: {sensorId}, Zona: {zone}, Tipo: {type}, Intervalo: {intervalSeconds}s, Payload: {SensorClient.NormalizePayloadFormat(payloadFormat)}");
         if (!client.EnsureConnection())
         {
             Console.WriteLine("[SENSOR] Não foi possível estabelecer a ligação inicial ao RabbitMQ. O mecanismo de reconexão continuará a tentar em background.");
