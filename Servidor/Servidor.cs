@@ -127,16 +127,6 @@ namespace Servidor
             _listener.Start();
             _running = true;
 
-#if false
-
-            Console.WriteLine("╔══════════════════════════════════════════════╗");
-            Console.WriteLine("║   SERVIDOR — Monitorização Urbana One Health ║");
-            Console.WriteLine("╠══════════════════════════════════════════════╣");
-            Console.WriteLine($"║   A escutar na porta {_porta}...            ║");
-            Console.WriteLine("╚══════════════════════════════════════════════╝");
-            Console.WriteLine();
-
-#endif
             _cliHandler.ShowBanner();
 
             // Thread para input do utilizador (comando de encerramento)
@@ -181,152 +171,8 @@ namespace Servidor
             }
         }
 
-        /// <summary>
-        /// Lê input do utilizador para comandos do servidor (ex: "sair").
-        /// </summary>
-#if false
-        private void LerInput()
-        {
-            while (_running)
-            {
-                string? input = Console.ReadLine();
-                if (input == null) continue;
-
-                string trimmed = input.Trim();
-                if (string.IsNullOrEmpty(trimmed)) continue;
-
-                string[] parts = trimmed.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                string cmd = parts[0].ToLower();
-
-                if (cmd == "sair")
-                {
-                    Console.WriteLine("[Servidor] A encerrar...");
-                    _running = false;
-                    _listener?.Stop();
-                    break;
-                }
-                else if (cmd == "analisar")
-                {
-                    if (parts.Length >= 6)
-                    {
-                        string tipo = parts[1];
-                        string zona = parts[2];
-                        string sensorId = parts[3];
-                        string dateFrom = parts[4];
-                        string dateTo = parts[5];
-                        ExecutarAnalise(tipo, zona, sensorId, dateFrom, dateTo);
-                    }
-                    else
-                    {
-                        Console.WriteLine("\n--- Pedido de Análise Interativo ---");
-                        Console.Write("Introduza o Tipo de Sensor (ex: TEMP, HUM): ");
-                        string? tipo = Console.ReadLine()?.Trim();
-                        
-                        Console.Write("Introduza a Zona (ex: ZONA_CENTRO): ");
-                        string? zona = Console.ReadLine()?.Trim();
-
-                        Console.Write("Introduza o ID do Sensor (opcional, Enter para todos): ");
-                        string? sensorId = Console.ReadLine()?.Trim();
-
-                        Console.Write("Introduza a Data de Início (formato ISO 8601, opcional): ");
-                        string? dateFrom = Console.ReadLine()?.Trim();
-
-                        Console.Write("Introduza a Data de Fim (formato ISO 8601, opcional): ");
-                        string? dateTo = Console.ReadLine()?.Trim();
-
-                        if (string.IsNullOrEmpty(tipo) || string.IsNullOrEmpty(zona))
-                        {
-                            Console.WriteLine("[AVISO] Tipo e Zona são obrigatórios para a análise.");
-                        }
-                        else
-                        {
-                            ExecutarAnalise(tipo, zona, sensorId ?? "", dateFrom ?? "", dateTo ?? "");
-                        }
-                    }
-                }
-                else if (cmd == "prever")
-                {
-                    if (parts.Length >= 4)
-                    {
-                        string tipo = parts[1];
-                        string zona = parts[2];
-                        if (int.TryParse(parts[3], out int periodos))
-                        {
-                            // Estratégia opcional como 5º argumento (linear|ewma).
-                            string strategy = parts.Length >= 5 ? NormalizarEstrategia(parts[4]) : "linear";
-                            ExecutarPrevisao(tipo, zona, periodos, strategy);
-                        }
-                        else
-                        {
-                            Console.WriteLine("[ERRO] Número de períodos inválido.");
-                        }
-                    }
-                    else
-                    {
-                        Console.WriteLine("\n--- Pedido de Previsão Interativo ---");
-                        Console.Write("Introduza o Tipo de Sensor (ex: TEMP, HUM): ");
-                        string? tipo = Console.ReadLine()?.Trim();
-
-                        Console.Write("Introduza a Zona (ex: ZONA_CENTRO): ");
-                        string? zona = Console.ReadLine()?.Trim();
-
-                        Console.Write("Introduza o número de períodos a prever: ");
-                        string? periodosStr = Console.ReadLine()?.Trim();
-
-                        Console.Write("Introduza a estratégia de previsão (linear | ewma) [linear]: ");
-                        string strategy = NormalizarEstrategia(Console.ReadLine()?.Trim());
-
-                        if (string.IsNullOrEmpty(tipo) || string.IsNullOrEmpty(zona) || !int.TryParse(periodosStr, out int periodos))
-                        {
-                            Console.WriteLine("[AVISO] Parâmetros de previsão inválidos.");
-                        }
-                        else
-                        {
-                            ExecutarPrevisao(tipo, zona, periodos, strategy);
-                        }
-                    }
-                }
-                else if (cmd == "historico")
-                {
-                    lock (HistoricoLock)
-                    {
-                        Console.WriteLine($"\n--- Histórico de Análises Realizadas ({HistoricoAnalises.Count} registos) ---");
-                        for (int i = 0; i < HistoricoAnalises.Count; i++)
-                        {
-                            var r = HistoricoAnalises[i];
-                            Console.WriteLine($"[{i + 1}] Time: {r.Timestamp} | Avg: {r.ComputedAverage:F2} | Alert: {r.AlertLevel} | Summary: {r.ResultSummary}");
-                        }
-                        Console.WriteLine("-------------------------------------------------------------------------");
-
-                        Console.WriteLine($"\n--- Histórico de Previsões Realizadas ({HistoricoPrevisoes.Count} registos) ---");
-                        for (int i = 0; i < HistoricoPrevisoes.Count; i++)
-                        {
-                            var p = HistoricoPrevisoes[i];
-                            Console.WriteLine($"[{i + 1}] Time: {p.Timestamp} | Estratégia: {p.StrategyUsed} | Forecast: [{string.Join(", ", p.Forecast)}] | Summary: {p.PredictionSummary}");
-                        }
-                        Console.WriteLine("-------------------------------------------------------------------------\n");
-                    }
-                }
-                else if (cmd == "ajuda")
-                {
-                    Console.WriteLine("\n--- Comandos Disponíveis ---");
-                    Console.WriteLine("  sair       - Encerra o Servidor.");
-                    Console.WriteLine("  analisar   - Inicia análise interativa.");
-                    Console.WriteLine("  prever     - Inicia previsão interativa.");
-                    Console.WriteLine("  historico  - Mostra o histórico de análises e previsões em memória.");
-                    Console.WriteLine("  ajuda      - Mostra esta lista de comandos.");
-                    Console.WriteLine("----------------------------\n");
-                }
-                else
-                {
-                    Console.WriteLine($"[Servidor] Comando desconhecido: '{cmd}'. Escreva 'ajuda' para ver a lista de comandos.");
-                }
-            }
-        }
-
         // Lê o URL do serviço de Análise a partir do appsettings.json (secção AnalysisService:Url),
         // dando precedência à variável de ambiente ANALYSIS_SERVICE_URL como override.
-#endif
         private static string CarregarAnalysisServiceUrl()
         {
             var config = new ConfigurationBuilder()
@@ -420,19 +266,6 @@ namespace Servidor
             {
                 // Envolver a chamada gRPC no pipeline Polly (retry exponencial 1/2/4s).
                 AnalysisResult response = _grpcPipeline.Execute(() => _analysisClient.Analyze(request));
-#if false
-
-                Console.WriteLine("\n╔══════════════════════════════════════════════╗");
-                Console.WriteLine("║            RESULTADO DA ANÁLISE              ║");
-                Console.WriteLine("╠══════════════════════════════════════════════╣");
-                Console.WriteLine($"║ Média Calculada: {response.ComputedAverage,27:F2} ║");
-                Console.WriteLine($"║ Nível de Alerta: {response.AlertLevel,27} ║");
-                Console.WriteLine($"║ Timestamp:       {response.Timestamp,27} ║");
-                Console.WriteLine("╠══════════════════════════════════════════════╣");
-                Console.WriteLine($"  Sumário: {response.ResultSummary}");
-                Console.WriteLine("╚══════════════════════════════════════════════╝\n");
-
-#endif
                 GuardarResultadoAnalise(response, request);
                 PersistirAnaliseMongoAsync(response, request).GetAwaiter().GetResult();
                 return response;
@@ -496,18 +329,6 @@ namespace Servidor
             try
             {
                 PredictionResult response = _grpcPipeline.Execute(() => _analysisClient.Predict(request));
-#if false
-
-                Console.WriteLine("\n╔══════════════════════════════════════════════╗");
-                Console.WriteLine("║            RESULTADO DA PREVISÃO             ║");
-                Console.WriteLine("╠══════════════════════════════════════════════╣");
-                Console.WriteLine($"║ Estratégia:      {response.StrategyUsed,27} ║");
-                Console.WriteLine($"║ Timestamp:       {response.Timestamp,27} ║");
-                Console.WriteLine("╠══════════════════════════════════════════════╣");
-                Console.WriteLine($"  Sumário: {response.PredictionSummary}");
-                Console.WriteLine("╚══════════════════════════════════════════════╝\n");
-
-#endif
                 GuardarResultadoPrevisao(response, request);
                 return response;
             }
@@ -859,23 +680,6 @@ namespace Servidor
                 CultureInfo.InvariantCulture,
                 DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
                 out parsed);
-        }
-
-        private static double CalcularMediana(IEnumerable<double> values)
-        {
-            var ordered = values.OrderBy(value => value).ToList();
-            if (ordered.Count == 0)
-            {
-                return 0.0;
-            }
-
-            int middle = ordered.Count / 2;
-            if (ordered.Count % 2 == 1)
-            {
-                return ordered[middle];
-            }
-
-            return (ordered[middle - 1] + ordered[middle]) / 2.0;
         }
 
         private static string InferirUnidade(string tipoDado)

@@ -5,7 +5,6 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
-using System.Xml.Linq;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
@@ -18,6 +17,7 @@ using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
+using Sensor;
 
 namespace Gateway
 {
@@ -80,10 +80,6 @@ namespace Gateway
                 })
                 .AddTimeout(TimeSpan.FromSeconds(5))
                 .Build();
-
-        // Controlo de sessões ativas por sensor_id (evita sessões duplicadas)
-        static readonly HashSet<string> _activeSessions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        static readonly object _sessionLock = new object();
 
         static void Main(string[] args)
         {
@@ -184,6 +180,9 @@ namespace Gateway
                     }
                     catch { }
                 }
+
+                // Libertar o Mutex nomeado do log de vídeo (cumpre o padrão IDisposable).
+                try { videoLogMutex.Dispose(); } catch { }
 
                 Environment.Exit(0);
             };
@@ -523,11 +522,20 @@ namespace Gateway
 
         /// <summary>
         /// Loop de recuperação para restabelecer a ligação com o Servidor Central de forma automática (Self-Healing).
+        ///
+        /// Concorrência: a flag 'isReconnecting' é o gate que garante uma única reconexão de
+        /// cada vez. SendToServer() ativa-a sob 'serverLock' ANTES de arrancar esta thread e
+        /// ignora qualquer envio enquanto estiver ativa, pelo que nunca é iniciada uma segunda
+        /// reconexão concorrente. A verificação explícita abaixo (sob lock) torna esse contrato
+        /// visível e protege contra invocações espúrias: se a flag não estiver ativa, não há
+        /// nada a recuperar.
         /// </summary>
         static void ReconnectToServer()
         {
             lock (serverLock)
             {
+                if (!isReconnecting) return; // Outra thread já completou (ou nunca iniciou) a reconexão
+
                 // Limpar e fechar o TcpClient, StreamReader e StreamWriter antigos.
                 serverReader?.Close();
                 serverWriter?.Close();
@@ -916,17 +924,5 @@ namespace Gateway
             string value = msg.value.ToString(CultureInfo.InvariantCulture);
             return $"DATA {msg.type} {value} {msg.zone} {msg.timestamp}";
         }
-    }
-
-    public class SensorMessage
-    {
-        public string sensorId { get; set; }
-        public string zone { get; set; }
-        public string type { get; set; }
-        public double value { get; set; }
-        public string unit { get; set; }
-        public string timestamp { get; set; }
-        public string raw { get; set; }
-        public string rawFormat { get; set; } = "";
     }
 }

@@ -537,8 +537,9 @@ internal class CliHandler
 
     private static string ColorizeTrend(string trend)
     {
-        string escaped = Escape(string.IsNullOrWhiteSpace(trend) ? "N/A" : trend);
-        string normalized = trend.ToLowerInvariant();
+        string safe = string.IsNullOrWhiteSpace(trend) ? "N/A" : trend;
+        string escaped = Escape(safe);
+        string normalized = safe.ToLowerInvariant();
 
         if (normalized.Contains("increasing") || normalized.Contains("cresc"))
         {

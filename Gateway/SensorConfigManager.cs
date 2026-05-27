@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Threading;
 
 namespace Gateway
 {
@@ -22,8 +21,11 @@ namespace Gateway
         // Dicionário em memória: chave = sensor_id, valor = SensorConfig
         private readonly Dictionary<string, SensorConfig> _sensors;
 
-        // Mutex nomeado garantido para acesso exclusivo ao dicionário e ao ficheiro (concorrência)
-        private readonly Mutex _fileMutex = new Mutex(false, "GatewayConfigMutex");
+        // Lock intra-processo para acesso exclusivo ao dicionário e ao ficheiro CSV.
+        // O sensors.csv é propriedade de um único Gateway, por isso não é necessária
+        // sincronização inter-processo (um Mutex nomeado podia ficar bloqueado para
+        // sempre se uma exceção ocorresse antes do release).
+        private readonly object _syncObj = new object();
 
         /// <summary>
         /// Inicializa o gestor com o caminho do ficheiro CSV.
@@ -46,8 +48,7 @@ namespace Gateway
         /// <returns>Número de sensores carregados com sucesso.</returns>
         public int LoadConfig()
         {
-            _fileMutex.WaitOne();
-            try
+            lock (_syncObj)
             {
                 _sensors.Clear();
 
@@ -89,10 +90,6 @@ namespace Gateway
 
                 Console.WriteLine($"[CONFIG] Carregados {loaded} sensor(es) a partir de '{_filePath}'.");
                 return loaded;
-            }
-            finally
-            {
-                _fileMutex.ReleaseMutex();
             }
         }
 
@@ -221,8 +218,7 @@ namespace Gateway
         /// <returns>true se atualizado com sucesso; false se o sensor não existe.</returns>
         public bool UpdateLastSync(string sensorId, DateTime timestamp)
         {
-            _fileMutex.WaitOne();
-            try
+            lock (_syncObj)
             {
                 if (!_sensors.ContainsKey(sensorId))
                 {
@@ -236,10 +232,6 @@ namespace Gateway
                 // Persistir imediatamente no ficheiro
                 SaveToFile();
                 return true;
-            }
-            finally
-            {
-                _fileMutex.ReleaseMutex();
             }
         }
 
@@ -266,8 +258,7 @@ namespace Gateway
                 return false;
             }
 
-            _fileMutex.WaitOne();
-            try
+            lock (_syncObj)
             {
                 if (!_sensors.ContainsKey(sensorId))
                 {
@@ -283,10 +274,6 @@ namespace Gateway
                 SaveToFile();
                 return true;
             }
-            finally
-            {
-                _fileMutex.ReleaseMutex();
-            }
         }
 
         // ─────────────────────────────────────────────
@@ -300,17 +287,12 @@ namespace Gateway
         /// <returns>SensorConfig ou null se não encontrado.</returns>
         public SensorConfig GetSensor(string sensorId)
         {
-            _fileMutex.WaitOne();
-            try
+            lock (_syncObj)
             {
                 if (_sensors.TryGetValue(sensorId, out SensorConfig config))
                     return config.Clone();   // snapshot thread-safe
 
                 return null;
-            }
-            finally
-            {
-                _fileMutex.ReleaseMutex();
             }
         }
 
@@ -323,14 +305,9 @@ namespace Gateway
         /// </summary>
         public Dictionary<string, SensorConfig> GetDicionarioParaIteracao()
         {
-            _fileMutex.WaitOne();
-            try
+            lock (_syncObj)
             {
                 return _sensors.ToDictionary(entry => entry.Key, entry => entry.Value.Clone(), StringComparer.OrdinalIgnoreCase);
-            }
-            finally
-            {
-                _fileMutex.ReleaseMutex();
             }
         }
 
@@ -343,14 +320,9 @@ namespace Gateway
         /// </summary>
         public List<SensorConfig> GetAllSensors()
         {
-            _fileMutex.WaitOne();
-            try
+            lock (_syncObj)
             {
                 return _sensors.Values.Select(s => s.Clone()).ToList();
-            }
-            finally
-            {
-                _fileMutex.ReleaseMutex();
             }
         }
 

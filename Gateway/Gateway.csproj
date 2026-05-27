@@ -34,4 +34,9 @@
     <Protobuf Include="..\proto\preprocessing.proto" GrpcServices="Both" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Contrato SensorMessage partilhado com o projeto Sensor (fonte única) -->
+    <Compile Include="..\Sensor\SensorMessage.cs" Link="SensorMessage.cs" />
+  </ItemGroup>
+
 </Project>
