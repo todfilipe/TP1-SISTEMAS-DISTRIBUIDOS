@@ -83,6 +83,8 @@ namespace Servidor
                 .AddTimeout(TimeSpan.FromSeconds(10))
                 .Build();
 
+        private static readonly TimeSpan MongoWriteTimeout = TimeSpan.FromSeconds(5);
+
         public ServidorTCP(int porta = 9090)
         {
             _porta = porta;
@@ -432,7 +434,7 @@ namespace Servidor
 
 #endif
                 GuardarResultadoAnalise(response, request);
-                PersistirAnaliseMongoFireAndForget(response, request);
+                PersistirAnaliseMongoAsync(response, request).GetAwaiter().GetResult();
                 return response;
             }
             catch (Exception ex)
@@ -695,7 +697,7 @@ namespace Servidor
             }
         }
 
-        private void PersistirLeituraMongoFireAndForget(
+        private async Task<bool> PersistirLeituraMongoAsync(
             string sensorId,
             string tipoDado,
             string valor,
@@ -704,83 +706,114 @@ namespace Servidor
             string gatewayId,
             string mensagemOriginal)
         {
-            if (_readingsRepository == null || _sensorsMetadataRepository == null)
+            if (_readingsRepository == null)
             {
-                return;
+                Console.WriteLine("[AVISO][MongoDB] Repositório de leituras indisponível. Leitura guardada apenas no SQLite local.");
+                return false;
             }
 
-            _ = Task.Run(async () =>
+            bool readingPersisted = false;
+
+            try
             {
-                try
+                if (!double.TryParse(valor, NumberStyles.Any, CultureInfo.InvariantCulture, out double valorNumerico))
                 {
-                    if (!double.TryParse(valor, NumberStyles.Any, CultureInfo.InvariantCulture, out double valorNumerico))
-                    {
-                        Console.WriteLine($"[ERRO][MongoDB] Valor inválido para persistência MongoDB: {valor}");
-                        return;
-                    }
-
-                    DateTime timestampUtc = ParseDateTimeOrUtcNow(timestamp);
-
-                    var reading = new ReadingDocument
-                    {
-                        SensorId = sensorId,
-                        Zone = zona,
-                        Type = tipoDado,
-                        Value = valorNumerico,
-                        Unit = InferirUnidade(tipoDado),
-                        Timestamp = timestampUtc,
-                        GatewayId = gatewayId,
-                        OriginalMessageFormat = mensagemOriginal,
-                        CreatedAt = DateTime.UtcNow
-                    };
-
-                    await _readingsRepository.InsertAsync(reading);
-                    await _sensorsMetadataRepository.UpsertObservationAsync(sensorId, zona, tipoDado, timestampUtc);
+                    Console.WriteLine($"[ERRO][MongoDB] Valor inválido para persistência MongoDB: {valor}. Leitura guardada apenas no SQLite local.");
+                    return false;
                 }
-                catch (Exception ex)
+
+                DateTime timestampUtc = ParseDateTimeOrUtcNow(timestamp);
+
+                var reading = new ReadingDocument
                 {
-                    Console.WriteLine($"[ERRO][MongoDB] Falha ao persistir leitura no MongoDB: {ex.Message}");
+                    SensorId = sensorId,
+                    Zone = zona,
+                    Type = tipoDado,
+                    Value = valorNumerico,
+                    Unit = InferirUnidade(tipoDado),
+                    Timestamp = timestampUtc,
+                    GatewayId = gatewayId,
+                    OriginalMessageFormat = mensagemOriginal,
+                    CreatedAt = DateTime.UtcNow
+                };
+
+                using var cts = new CancellationTokenSource(MongoWriteTimeout);
+                await _readingsRepository.InsertAsync(reading, cts.Token);
+                readingPersisted = true;
+                Console.WriteLine($"[Servidor][MongoDB] Leitura persistida em readings: sensor={sensorId}, tipo={tipoDado}, zona={zona}, timestamp={timestampUtc:yyyy-MM-ddTHH:mm:ssZ}.");
+
+                if (_sensorsMetadataRepository == null)
+                {
+                    Console.WriteLine("[AVISO][MongoDB] Repositório de metadados indisponível. Leitura persistida em readings, mas sensors_metadata não foi atualizado.");
+                    return true;
                 }
-            });
+
+                await _sensorsMetadataRepository.UpsertObservationAsync(sensorId, zona, tipoDado, timestampUtc, cts.Token);
+                Console.WriteLine($"[Servidor][MongoDB] Metadados do sensor atualizados: sensor={sensorId}.");
+                return true;
+            }
+            catch (OperationCanceledException ex)
+            {
+                string impacto = readingPersisted
+                    ? "Leitura persistida em readings, mas a atualização de sensors_metadata não foi confirmada."
+                    : "Leitura guardada apenas no SQLite local.";
+                Console.WriteLine($"[ERRO][MongoDB] Timeout ao persistir leitura após {MongoWriteTimeout.TotalSeconds:0}s: {ex.Message}. {impacto}");
+                return false;
+            }
+            catch (Exception ex)
+            {
+                string impacto = readingPersisted
+                    ? "Leitura persistida em readings, mas a atualização de sensors_metadata falhou."
+                    : "Leitura guardada apenas no SQLite local.";
+                Console.WriteLine($"[ERRO][MongoDB] Falha ao persistir leitura no MongoDB: {ex.GetType().Name}: {ex.Message}. {impacto}");
+                return false;
+            }
         }
 
-        private void PersistirAnaliseMongoFireAndForget(AnalysisResult result, AnalysisRequest request)
+        private async Task<bool> PersistirAnaliseMongoAsync(AnalysisResult result, AnalysisRequest request)
         {
             if (_analysesRepository == null)
             {
-                return;
+                Console.WriteLine("[AVISO][MongoDB] Repositório de análises indisponível. Resultado mantido apenas em memória/ficheiro local.");
+                return false;
             }
 
-            _ = Task.Run(async () =>
+            try
             {
-                try
-                {
-                    DateTime windowStart = ResolveWindowBoundary(request.DateFrom, request.Readings.Select(r => r.Timestamp), useMinimum: true);
-                    DateTime windowEnd = ResolveWindowBoundary(request.DateTo, request.Readings.Select(r => r.Timestamp), useMinimum: false);
+                DateTime windowStart = ResolveWindowBoundary(request.DateFrom, request.Readings.Select(r => r.Timestamp), useMinimum: true);
+                DateTime windowEnd = ResolveWindowBoundary(request.DateTo, request.Readings.Select(r => r.Timestamp), useMinimum: false);
 
-                    var analysis = new AnalysisDocument
-                    {
-                        SensorId = string.IsNullOrWhiteSpace(request.SensorId) ? null : request.SensorId,
-                        Zone = request.Zone,
-                        Type = request.Type,
-                        WindowStart = windowStart,
-                        WindowEnd = windowEnd,
-                        Average = result.Mean != 0 ? result.Mean : result.ComputedAverage,
-                        StandardDeviation = result.StdDev,
-                        Median = CalcularMediana(request.Readings.Select(r => r.Value)),
-                        OutlierCount = result.OutliersCount,
-                        TrendClassification = result.Trend,
-                        CreatedAt = DateTime.UtcNow,
-                        RawGrpcResultSerialized = JsonFormatter.Default.Format(result)
-                    };
-
-                    await _analysesRepository.InsertAsync(analysis);
-                }
-                catch (Exception ex)
+                var analysis = new AnalysisDocument
                 {
-                    Console.WriteLine($"[ERRO][MongoDB] Falha ao persistir análise no MongoDB: {ex.Message}");
-                }
-            });
+                    SensorId = string.IsNullOrWhiteSpace(request.SensorId) ? null : request.SensorId,
+                    Zone = request.Zone,
+                    Type = request.Type,
+                    WindowStart = windowStart,
+                    WindowEnd = windowEnd,
+                    Average = result.Mean != 0 ? result.Mean : result.ComputedAverage,
+                    StandardDeviation = result.StdDev,
+                    Median = CalcularMediana(request.Readings.Select(r => r.Value)),
+                    OutlierCount = result.OutliersCount,
+                    TrendClassification = result.Trend,
+                    CreatedAt = DateTime.UtcNow,
+                    RawGrpcResultSerialized = JsonFormatter.Default.Format(result)
+                };
+
+                using var cts = new CancellationTokenSource(MongoWriteTimeout);
+                await _analysesRepository.InsertAsync(analysis, cts.Token);
+                Console.WriteLine($"[Servidor][MongoDB] Análise persistida em analyses: tipo={request.Type}, zona={request.Zone}, janela={windowStart:yyyy-MM-ddTHH:mm:ssZ}->{windowEnd:yyyy-MM-ddTHH:mm:ssZ}.");
+                return true;
+            }
+            catch (OperationCanceledException ex)
+            {
+                Console.WriteLine($"[ERRO][MongoDB] Timeout ao persistir análise após {MongoWriteTimeout.TotalSeconds:0}s: {ex.Message}. Resultado mantido apenas em memória/ficheiro local.");
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ERRO][MongoDB] Falha ao persistir análise no MongoDB: {ex.GetType().Name}: {ex.Message}. Resultado mantido apenas em memória/ficheiro local.");
+                return false;
+            }
         }
 
         private static DateTime ResolveWindowBoundary(string candidate, IEnumerable<string> readingTimestamps, bool useMinimum)
@@ -1057,7 +1090,9 @@ namespace Servidor
             switch (resultado)
             {
                 case ResultadoArmazenamento.Sucesso:
-                    PersistirLeituraMongoFireAndForget(sensorId, tipoDado, valor, zona, timestamp, gatewayId, string.Join(' ', partes));
+                    PersistirLeituraMongoAsync(sensorId, tipoDado, valor, zona, timestamp, gatewayId, string.Join(' ', partes))
+                        .GetAwaiter()
+                        .GetResult();
                     return "OK";
                 case ResultadoArmazenamento.ErroStorage:
                     return "ERR_STORAGE_FULL";
@@ -1090,7 +1125,9 @@ namespace Servidor
             switch (resultado)
             {
                 case ResultadoArmazenamento.Sucesso:
-                    PersistirLeituraMongoFireAndForget("AGREGADO_" + gatewayId, tipoDado, valor, zona, timestamp, gatewayId, string.Join(' ', partes));
+                    PersistirLeituraMongoAsync("AGREGADO_" + gatewayId, tipoDado, valor, zona, timestamp, gatewayId, string.Join(' ', partes))
+                        .GetAwaiter()
+                        .GetResult();
                     return "OK";
                 case ResultadoArmazenamento.ErroStorage:
                     return "ERR_STORAGE_FULL";
