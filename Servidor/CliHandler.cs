@@ -330,6 +330,7 @@ internal class CliHandler
 
     private void ShowAnalysisResult(AnalysisResult result)
     {
+        bool failed = IsFailure(result.ResultSummary);
         var table = new Table()
             .Border(TableBorder.Simple)
             .HideHeaders();
@@ -343,16 +344,18 @@ internal class CliHandler
         table.AddRow("[bold]Min / Max[/]", $"{result.Min:0.###} / {result.Max:0.###}");
         table.AddRow("[bold]Outliers[/]", result.OutliersCount.ToString(CultureInfo.InvariantCulture));
         table.AddRow("[bold]Tendencia[/]", ColorizeTrend(result.Trend));
+        table.AddRow("[bold]Amostras[/]", result.SampleCount.ToString(CultureInfo.InvariantCulture));
         table.AddRow("[bold]Timestamp[/]", Escape(result.Timestamp));
 
         AnsiConsole.Write(new Panel(table)
-            .Header("[bold green]Resultado da Analise[/]")
+            .Header(failed ? "[bold red]Falha da Analise[/]" : "[bold green]Resultado da Analise[/]")
             .Border(BoxBorder.Rounded)
-            .BorderColor(Color.Green));
+            .BorderColor(failed ? Color.Red : Color.Green));
     }
 
     private void ShowPredictionResult(PredictionResult result)
     {
+        bool failed = IsFailure(result.PredictionSummary);
         var table = new Table()
             .Border(TableBorder.Simple)
             .HideHeaders();
@@ -365,9 +368,9 @@ internal class CliHandler
         table.AddRow("[bold]Timestamp[/]", Escape(result.Timestamp));
 
         AnsiConsole.Write(new Panel(table)
-            .Header("[bold green]Resultado da Previsao[/]")
+            .Header(failed ? "[bold red]Falha da Previsao[/]" : "[bold green]Resultado da Previsao[/]")
             .Border(BoxBorder.Rounded)
-            .BorderColor(Color.Green));
+            .BorderColor(failed ? Color.Red : Color.Green));
     }
 
     private void ShowHistory()
@@ -546,6 +549,11 @@ internal class CliHandler
     private static string Escape(string value)
     {
         return Markup.Escape(value ?? string.Empty);
+    }
+
+    private static bool IsFailure(string value)
+    {
+        return value?.TrimStart().StartsWith("FALHA:", StringComparison.OrdinalIgnoreCase) == true;
     }
 
     private static void ShowUnavailable(string message)

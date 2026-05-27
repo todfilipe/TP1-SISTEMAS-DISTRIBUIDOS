@@ -397,21 +397,21 @@ namespace Servidor
                 DateTo = dateTo ?? ""
             };
 
-            // Recolher as leituras do store interno do Servidor e enviá-las no request.
+            // Recolher as leituras do MongoDB e enviá-las no request.
             // O serviço de Análise é puro: não conhece a BD, apenas calcula sobre os dados recebidos.
-            var medicoes = _dataStore.ObterMedicoes(tipo, zona, sensorId, dateFrom, dateTo);
-            foreach (var m in medicoes)
+            var readings = ObterReadingsMongoParaGrpc(tipo, zona, sensorId, dateFrom, dateTo, "análise", out string? erroMongo);
+            if (erroMongo != null)
             {
-                request.Readings.Add(new Reading
-                {
-                    Value = m.Valor,
-                    Timestamp = m.Timestamp ?? "",
-                    Type = m.Tipo ?? "",
-                    SensorId = m.SensorId ?? "",
-                    Zone = m.Zona ?? ""
-                });
+                var falhaMongo = CriarFalhaAnalise(erroMongo);
+                GuardarResultadoAnalise(falhaMongo, request);
+                return falhaMongo;
             }
-            Console.WriteLine($"[Servidor] {request.Readings.Count} leitura(s) recolhida(s) do store interno para análise.");
+
+            foreach (var reading in readings)
+            {
+                request.Readings.Add(reading);
+            }
+            Console.WriteLine($"[Servidor] {request.Readings.Count} leitura(s) recolhida(s) do MongoDB/readings para análise.");
 
             Console.WriteLine($"[Servidor] A enviar pedido de análise ao AnalysisService gRPC (com resiliência Polly)...");
             try
@@ -475,20 +475,20 @@ namespace Servidor
                 Strategy = strategy
             };
 
-            // Recolher o histórico do store interno e enviá-lo no request.
-            var medicoes = _dataStore.ObterMedicoes(tipo, zona);
-            foreach (var m in medicoes)
+            // Recolher o histórico do MongoDB e enviá-lo no request.
+            var readings = ObterReadingsMongoParaGrpc(tipo, zona, null, null, null, "previsão", out string? erroMongo);
+            if (erroMongo != null)
             {
-                request.Readings.Add(new Reading
-                {
-                    Value = m.Valor,
-                    Timestamp = m.Timestamp ?? "",
-                    Type = m.Tipo ?? "",
-                    SensorId = m.SensorId ?? "",
-                    Zone = m.Zona ?? ""
-                });
+                var falhaMongo = CriarFalhaPrevisao(erroMongo, request.Strategy);
+                GuardarResultadoPrevisao(falhaMongo, request);
+                return falhaMongo;
             }
-            Console.WriteLine($"[Servidor] {request.Readings.Count} leitura(s) histórica(s) recolhida(s) para previsão.");
+
+            foreach (var reading in readings)
+            {
+                request.Readings.Add(reading);
+            }
+            Console.WriteLine($"[Servidor] {request.Readings.Count} leitura(s) histórica(s) recolhida(s) do MongoDB/readings para previsão.");
 
             Console.WriteLine($"[Servidor] A enviar pedido de previsão ao AnalysisService gRPC (com resiliência Polly)...");
             try
@@ -524,6 +524,146 @@ namespace Servidor
                 GuardarResultadoPrevisao(falha, request);
                 return falha;
             }
+        }
+
+        private IReadOnlyList<Reading> ObterReadingsMongoParaGrpc(
+            string? tipo,
+            string? zona,
+            string? sensorId,
+            string? dateFrom,
+            string? dateTo,
+            string operacao,
+            out string? erro)
+        {
+            erro = null;
+
+            if (_readingsRepository == null)
+            {
+                erro = $"FALHA: repositório MongoDB de leituras indisponível; não foi possível carregar dados da coleção readings para {operacao}. SQLite não foi usado como fonte principal.";
+                Console.WriteLine($"[AVISO][MongoDB] {erro}");
+                return Array.Empty<Reading>();
+            }
+
+            string? normalizedType = NormalizarFiltroOpcional(tipo);
+            string? normalizedZone = NormalizarFiltroOpcional(zona);
+            string? normalizedSensorId = NormalizarFiltroOpcional(sensorId);
+
+            if (!TryParseFiltroTemporal(dateFrom, out DateTime? from, out string? erroFrom))
+            {
+                erro = $"FALHA: filtro temporal inicial inválido para consulta MongoDB/readings: '{dateFrom}'.";
+                Console.WriteLine($"[AVISO][MongoDB] {erroFrom}");
+                return Array.Empty<Reading>();
+            }
+
+            if (!TryParseFiltroTemporal(dateTo, out DateTime? to, out string? erroTo))
+            {
+                erro = $"FALHA: filtro temporal final inválido para consulta MongoDB/readings: '{dateTo}'.";
+                Console.WriteLine($"[AVISO][MongoDB] {erroTo}");
+                return Array.Empty<Reading>();
+            }
+
+            try
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                var documentos = _readingsRepository.FindAsync(
+                    sensorId: normalizedSensorId,
+                    zone: normalizedZone,
+                    type: normalizedType,
+                    from: from,
+                    to: to,
+                    cancellationToken: cts.Token).GetAwaiter().GetResult();
+
+                if (documentos.Count == 0)
+                {
+                    erro = $"FALHA: não existem leituras na coleção MongoDB/readings para {operacao} com os filtros {DescreverFiltros(normalizedType, normalizedZone, normalizedSensorId, from, to)}. SQLite não foi consultado.";
+                    Console.WriteLine($"[AVISO][MongoDB] {erro}");
+                    return Array.Empty<Reading>();
+                }
+
+                return documentos
+                    .OrderBy(reading => reading.Timestamp)
+                    .Select(MapearReadingMongoParaGrpc)
+                    .ToList();
+            }
+            catch (Exception ex)
+            {
+                erro = $"FALHA: MongoDB inacessível ao consultar a coleção readings para {operacao}: {ex.Message}. SQLite não foi consultado.";
+                Console.WriteLine($"[AVISO][MongoDB] {erro}");
+                return Array.Empty<Reading>();
+            }
+        }
+
+        private static Reading MapearReadingMongoParaGrpc(ReadingDocument reading)
+        {
+            return new Reading
+            {
+                Value = reading.Value,
+                Timestamp = reading.Timestamp.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture),
+                Type = reading.Type ?? "",
+                SensorId = reading.SensorId ?? "",
+                Zone = reading.Zone ?? ""
+            };
+        }
+
+        private static AnalysisResult CriarFalhaAnalise(string mensagem)
+        {
+            return new AnalysisResult
+            {
+                ResultSummary = mensagem,
+                ComputedAverage = 0.0,
+                AlertLevel = "UNKNOWN",
+                Timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture),
+                SampleCount = 0
+            };
+        }
+
+        private static PredictionResult CriarFalhaPrevisao(string mensagem, string strategy)
+        {
+            return new PredictionResult
+            {
+                PredictionSummary = mensagem,
+                StrategyUsed = strategy,
+                Timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture)
+            };
+        }
+
+        private static string? NormalizarFiltroOpcional(string? value)
+        {
+            return string.IsNullOrWhiteSpace(value) || value.Trim() == "-" ? null : value.Trim();
+        }
+
+        private static bool TryParseFiltroTemporal(string? value, out DateTime? parsed, out string? erro)
+        {
+            parsed = null;
+            erro = null;
+
+            string? normalized = NormalizarFiltroOpcional(value);
+            if (normalized == null)
+            {
+                return true;
+            }
+
+            if (TryParseUtc(normalized, out DateTime parsedDate))
+            {
+                parsed = parsedDate;
+                return true;
+            }
+
+            erro = $"Filtro temporal inválido: '{value}'.";
+            return false;
+        }
+
+        private static string DescreverFiltros(string? tipo, string? zona, string? sensorId, DateTime? from, DateTime? to)
+        {
+            var filtros = new List<string>();
+
+            if (!string.IsNullOrWhiteSpace(tipo)) filtros.Add($"tipo='{tipo}'");
+            if (!string.IsNullOrWhiteSpace(zona)) filtros.Add($"zona='{zona}'");
+            if (!string.IsNullOrWhiteSpace(sensorId)) filtros.Add($"sensorId='{sensorId}'");
+            if (from.HasValue) filtros.Add($"from='{from.Value:yyyy-MM-ddTHH:mm:ssZ}'");
+            if (to.HasValue) filtros.Add($"to='{to.Value:yyyy-MM-ddTHH:mm:ssZ}'");
+
+            return filtros.Count == 0 ? "sem filtros" : string.Join(", ", filtros);
         }
 
         private void GuardarResultadoAnalise(AnalysisResult result, AnalysisRequest request)
