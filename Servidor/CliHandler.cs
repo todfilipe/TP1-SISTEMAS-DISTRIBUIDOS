@@ -340,6 +340,10 @@ internal class CliHandler
         table.AddRow("[bold]Resumo[/]", Escape(result.ResultSummary));
         table.AddRow("[bold]Media[/]", result.ComputedAverage.ToString("0.###", CultureInfo.InvariantCulture));
         table.AddRow("[bold]Mean[/]", result.Mean.ToString("0.###", CultureInfo.InvariantCulture));
+        table.AddRow("[bold]Mediana[/]", result.Median.ToString("0.###", CultureInfo.InvariantCulture));
+        table.AddRow("[bold]Percentil 25[/]", result.Percentile25.ToString("0.###", CultureInfo.InvariantCulture));
+        table.AddRow("[bold]Percentil 75[/]", result.Percentile75.ToString("0.###", CultureInfo.InvariantCulture));
+        table.AddRow("[bold]Percentil 95[/]", result.Percentile95.ToString("0.###", CultureInfo.InvariantCulture));
         table.AddRow("[bold]StdDev[/]", result.StdDev.ToString("0.###", CultureInfo.InvariantCulture));
         table.AddRow("[bold]Min / Max[/]", $"{result.Min:0.###} / {result.Max:0.###}");
         table.AddRow("[bold]Outliers[/]", result.OutliersCount.ToString(CultureInfo.InvariantCulture));

@@ -191,6 +191,10 @@ class AnalysisServiceServicer(analysis_pb2_grpc.AnalysisServiceServicer):
         std_dev = float(np.std(arr, ddof=1)) if n > 1 else 0.0
         v_min = float(np.min(arr))
         v_max = float(np.max(arr))
+        median = float(np.median(arr))
+        percentile25 = float(np.percentile(arr, 25))
+        percentile75 = float(np.percentile(arr, 75))
+        percentile95 = float(np.percentile(arr, 95))
 
         # 2. Médias móveis (pandas)
         window = 5
@@ -210,7 +214,7 @@ class AnalysisServiceServicer(analysis_pb2_grpc.AnalysisServiceServicer):
 
         summary = (
             f"Analyzed {n} readings of type '{request.type or 'ALL'}'. "
-            f"Mean: {mean:.2f} (std={std_dev:.2f}, min={v_min:.2f}, max={v_max:.2f}). "
+            f"Mean: {mean:.2f} (median={median:.2f}, std={std_dev:.2f}, min={v_min:.2f}, max={v_max:.2f}). "
             f"Trend: {trend} (slope={slope:.4f}). "
             f"Outliers: {outliers_count} (Z-score threshold 2.0). "
             f"Last moving avg ({window} periods): {moving_avg_last:.2f}. "
@@ -233,6 +237,10 @@ class AnalysisServiceServicer(analysis_pb2_grpc.AnalysisServiceServicer):
             trend=trend,
             movingAverageLast=moving_avg_last,
             sampleCount=n,
+            median=median,
+            percentile25=percentile25,
+            percentile75=percentile75,
+            percentile95=percentile95,
         )
 
     def Predict(self, request, context):

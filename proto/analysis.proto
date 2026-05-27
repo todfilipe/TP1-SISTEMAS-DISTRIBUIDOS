@@ -46,6 +46,10 @@ message AnalysisResult {
   string trend = 11;               // "Increasing" / "Stable" / "Decreasing"
   double movingAverageLast = 12;
   int32 sampleCount = 13;
+  double median = 14;
+  double percentile25 = 15;
+  double percentile75 = 16;
+  double percentile95 = 17;
 }
 
 message PredictionRequest {

@@ -684,6 +684,8 @@ namespace Servidor
                     writer.WriteLine($"Request - Tipo: {request.Type}, Zona: {request.Zone}, Sensor: {request.SensorId}, From: {request.DateFrom}, To: {request.DateTo}");
                     writer.WriteLine($"Result  - Summary: {result.ResultSummary}");
                     writer.WriteLine($"Result  - Average: {result.ComputedAverage:F2}");
+                    writer.WriteLine($"Result  - Median: {result.Median:F2}");
+                    writer.WriteLine($"Result  - Percentiles: P25={result.Percentile25:F2}, P75={result.Percentile75:F2}, P95={result.Percentile95:F2}");
                     writer.WriteLine($"Result  - Alert Level: {result.AlertLevel}");
                     writer.WriteLine($"Result  - Timestamp: {result.Timestamp}");
                     writer.WriteLine("==================================================");
@@ -792,7 +794,7 @@ namespace Servidor
                     WindowEnd = windowEnd,
                     Average = result.Mean != 0 ? result.Mean : result.ComputedAverage,
                     StandardDeviation = result.StdDev,
-                    Median = CalcularMediana(request.Readings.Select(r => r.Value)),
+                    Median = result.Median,
                     OutlierCount = result.OutliersCount,
                     TrendClassification = result.Trend,
                     CreatedAt = DateTime.UtcNow,

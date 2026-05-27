@@ -37,6 +37,15 @@ def test_media_correta():
     assert resp.sampleCount == 3
 
 
+def test_mediana_e_percentis():
+    resp = _analyze([10.0, 20.0, 30.0, 40.0, 50.0])
+    assert abs(resp.median - 30.0) < 0.001
+    assert abs(resp.percentile25 - 20.0) < 0.001
+    assert abs(resp.percentile75 - 40.0) < 0.001
+    assert abs(resp.percentile95 - 48.0) < 0.001
+    assert "median=30.00" in resp.resultSummary
+
+
 def test_deteta_outlier_conhecido():
     # Série estável com um valor obviamente fora
     valores = [10.0, 10.1, 9.9, 10.0, 10.2, 9.8, 100.0]
