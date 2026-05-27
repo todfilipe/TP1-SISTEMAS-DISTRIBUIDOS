@@ -248,7 +248,11 @@ internal class CliHandler
         table.AddColumn("[bold]Janela[/]");
         table.AddColumn("[bold]Media[/]");
         table.AddColumn("[bold]Desvio[/]");
+        table.AddColumn("[bold]P25[/]");
+        table.AddColumn("[bold]P75[/]");
+        table.AddColumn("[bold]P95[/]");
         table.AddColumn("[bold]Tendencia[/]");
+        table.AddColumn("[bold]Alerta[/]");
 
         foreach (var analysis in analyses)
         {
@@ -258,7 +262,11 @@ internal class CliHandler
                 $"{FormatDate(analysis.WindowStart)} -> {FormatDate(analysis.WindowEnd)}",
                 analysis.Average.ToString("0.###", CultureInfo.InvariantCulture),
                 analysis.StandardDeviation.ToString("0.###", CultureInfo.InvariantCulture),
-                ColorizeTrend(analysis.TrendClassification));
+                analysis.Percentile25.ToString("0.###", CultureInfo.InvariantCulture),
+                analysis.Percentile75.ToString("0.###", CultureInfo.InvariantCulture),
+                analysis.Percentile95.ToString("0.###", CultureInfo.InvariantCulture),
+                ColorizeTrend(analysis.TrendClassification),
+                ColorizeAlertLevel(analysis.AlertLevel));
         }
 
         AnsiConsole.Write(table);
@@ -548,6 +556,20 @@ internal class CliHandler
         }
 
         return $"[grey]{escaped}[/]";
+    }
+
+    private static string ColorizeAlertLevel(string alertLevel)
+    {
+        string escaped = Escape(string.IsNullOrWhiteSpace(alertLevel) ? "N/A" : alertLevel);
+        string normalized = alertLevel.ToUpperInvariant();
+
+        return normalized switch
+        {
+            "NORMAL" => $"[green]{escaped}[/]",
+            "WARNING" => $"[yellow]{escaped}[/]",
+            "CRITICAL" => $"[red]{escaped}[/]",
+            _ => $"[grey]{escaped}[/]"
+        };
     }
 
     private static string Escape(string value)

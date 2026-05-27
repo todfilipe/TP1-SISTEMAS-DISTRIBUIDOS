@@ -36,11 +36,38 @@ public class AnalysisDocument
     [BsonElement("median")]
     public double Median { get; set; }
 
+    [BsonElement("percentile25")]
+    public double Percentile25 { get; set; }
+
+    [BsonElement("percentile75")]
+    public double Percentile75 { get; set; }
+
+    [BsonElement("percentile95")]
+    public double Percentile95 { get; set; }
+
+    [BsonElement("min")]
+    public double Min { get; set; }
+
+    [BsonElement("max")]
+    public double Max { get; set; }
+
     [BsonElement("outlierCount")]
     public int OutlierCount { get; set; }
 
+    [BsonElement("trendSlope")]
+    public double TrendSlope { get; set; }
+
     [BsonElement("trendClassification")]
     public string TrendClassification { get; set; } = string.Empty;
+
+    [BsonElement("sampleCount")]
+    public int SampleCount { get; set; }
+
+    [BsonElement("movingAverageLast")]
+    public double MovingAverageLast { get; set; }
+
+    [BsonElement("alertLevel")]
+    public string AlertLevel { get; set; } = string.Empty;
 
     [BsonElement("createdAt")]
     [BsonDateTimeOptions(Kind = DateTimeKind.Utc)]

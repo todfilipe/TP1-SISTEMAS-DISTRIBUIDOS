@@ -1,0 +1,15 @@
+{
+  "name": "onehealth-sensor-node",
+  "version": "1.0.0",
+  "description": "Sensor Node.js para publicar leituras One Health no RabbitMQ.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "amqplib": "^0.10.4"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

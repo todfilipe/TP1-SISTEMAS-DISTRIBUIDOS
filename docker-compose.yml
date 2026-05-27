@@ -115,7 +115,43 @@ services:
       - sd-net
     restart: unless-stopped
 
-# Rede explícita partilhada por todos os serviços (e, futuramente,
+  # Dashboard web - paginas HTML e JSON sobre os dados MongoDB
+  dashboard:
+    build: ./Dashboard
+    container_name: dashboard
+    ports:
+      - "3000:3000"
+    environment:
+      MONGODB_URI: mongodb://${MONGODB_ROOT_USERNAME:-admin}:${MONGODB_ROOT_PASSWORD:-admin}@mongodb:27017/${MONGODB_DATABASE:-urbanodb}?authSource=admin
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - sd-net
+    restart: unless-stopped
+
+  sensor-node:
+    build: ./SensorNode
+    container_name: sensor-node
+    environment:
+      SENSOR_ID: ${SENSOR_NODE_ID:-SNJ01}
+      SENSOR_ZONE: ${SENSOR_NODE_ZONE:-ZONA_CENTRO}
+      SENSOR_TYPE: ${SENSOR_NODE_TYPE:-TEMP}
+      INTERVAL_SECONDS: ${SENSOR_NODE_INTERVAL_SECONDS:-5}
+      RABBIT_HOST: ${SENSOR_NODE_RABBIT_HOST:-rabbitmq}
+      RABBIT_PORT: ${SENSOR_NODE_RABBIT_PORT:-5672}
+      RABBIT_USER: ${SENSOR_NODE_RABBIT_USER:-admin}
+      RABBIT_PASS: ${SENSOR_NODE_RABBIT_PASS:-admin}
+      RABBIT_VHOST: ${SENSOR_NODE_RABBIT_VHOST:-onehealth}
+      PAYLOAD_FORMAT: ${SENSOR_NODE_PAYLOAD_FORMAT:-JSON}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - sd-net
+    restart: unless-stopped
+
+# Rede explicita partilhada por todos os servicos (e, futuramente,
 # pelos contentores de Gateway/Servidor quando forem dockerizados).
 networks:
   sd-net:

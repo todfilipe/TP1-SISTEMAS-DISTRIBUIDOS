@@ -1,0 +1,12 @@
+{
+  "sensorId": "SNJ01",
+  "zone": "ZONA_CENTRO",
+  "type": "TEMP",
+  "intervalSeconds": 5,
+  "rabbitHost": "localhost",
+  "rabbitPort": 5672,
+  "rabbitUser": "admin",
+  "rabbitPass": "admin",
+  "rabbitVHost": "onehealth",
+  "payloadFormat": "JSON"
+}

@@ -795,8 +795,17 @@ namespace Servidor
                     Average = result.Mean != 0 ? result.Mean : result.ComputedAverage,
                     StandardDeviation = result.StdDev,
                     Median = result.Median,
+                    Percentile25 = result.Percentile25,
+                    Percentile75 = result.Percentile75,
+                    Percentile95 = result.Percentile95,
+                    Min = result.Min,
+                    Max = result.Max,
                     OutlierCount = result.OutliersCount,
+                    TrendSlope = result.TrendSlope,
                     TrendClassification = result.Trend,
+                    SampleCount = result.SampleCount,
+                    MovingAverageLast = result.MovingAverageLast,
+                    AlertLevel = result.AlertLevel,
                     CreatedAt = DateTime.UtcNow,
                     RawGrpcResultSerialized = JsonFormatter.Default.Format(result)
                 };
@@ -1092,10 +1101,10 @@ namespace Servidor
             switch (resultado)
             {
                 case ResultadoArmazenamento.Sucesso:
-                    PersistirLeituraMongoAsync(sensorId, tipoDado, valor, zona, timestamp, gatewayId, string.Join(' ', partes))
+                    bool mongoPersisted = PersistirLeituraMongoAsync(sensorId, tipoDado, valor, zona, timestamp, gatewayId, string.Join(' ', partes))
                         .GetAwaiter()
                         .GetResult();
-                    return "OK";
+                    return ResolverRespostaPersistenciaMongo(mongoPersisted, gatewayId);
                 case ResultadoArmazenamento.ErroStorage:
                     return "ERR_STORAGE_FULL";
                 default:
@@ -1127,15 +1136,26 @@ namespace Servidor
             switch (resultado)
             {
                 case ResultadoArmazenamento.Sucesso:
-                    PersistirLeituraMongoAsync("AGREGADO_" + gatewayId, tipoDado, valor, zona, timestamp, gatewayId, string.Join(' ', partes))
+                    bool mongoPersisted = PersistirLeituraMongoAsync("AGREGADO_" + gatewayId, tipoDado, valor, zona, timestamp, gatewayId, string.Join(' ', partes))
                         .GetAwaiter()
                         .GetResult();
-                    return "OK";
+                    return ResolverRespostaPersistenciaMongo(mongoPersisted, gatewayId);
                 case ResultadoArmazenamento.ErroStorage:
                     return "ERR_STORAGE_FULL";
                 default:
                     return "ERR_INVALID_DATA";
             }
+        }
+
+        private string ResolverRespostaPersistenciaMongo(bool mongoPersisted, string gatewayId)
+        {
+            if (mongoPersisted || _readingsRepository == null)
+            {
+                return "OK";
+            }
+
+            Console.WriteLine($"[Servidor][ALERTA] MongoDB indisponível — ERR_STORAGE_FULL enviado ao Gateway {gatewayId}. Leitura guardada no SQLite como fallback.");
+            return "ERR_STORAGE_FULL";
         }
 
         /// <summary>
