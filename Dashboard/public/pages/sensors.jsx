@@ -40,6 +40,7 @@ function SensorsPage() {
   const [estadoFilter, setEstadoFilter] = useState(null);
   useEffect(() => { window.api.getSensors().then(setSensors); }, []);
   if (!sensors) return <Loading />;
+  const estadoOptions = window.api.ESTADOS.map((estado) => ({ value: estado, label: estado }));
 
   // Agrupar por sensorId (cada sensor pode ter vários tipos)
   const grouped = {};
@@ -93,7 +94,7 @@ function SensorsPage() {
                 onChange={(e) => setQuery(e.target.value)}
               />
             </div>
-            <Select value={estadoFilter} onChange={setEstadoFilter} options={[{value:'ativo',label:'Ativo'},{value:'manutencao',label:'Manutenção'},{value:'desativado',label:'Desativado'}]} placeholder="Estado" className="!w-[140px]" />
+            <Select value={estadoFilter} onChange={setEstadoFilter} options={estadoOptions} placeholder="Estado" className="!w-[140px]" />
           </div>
         </div>
         {rows.length === 0 ? (

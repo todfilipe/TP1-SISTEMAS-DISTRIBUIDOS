@@ -37,6 +37,7 @@
   <ItemGroup>
     <!-- Contrato SensorMessage partilhado com o projeto Sensor (fonte única) -->
     <Compile Include="..\Sensor\SensorMessage.cs" Link="SensorMessage.cs" />
+    <Compile Include="..\Shared\ProtocolConstants.cs" Link="Shared\ProtocolConstants.cs" />
   </ItemGroup>
 
 </Project>

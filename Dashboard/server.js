@@ -1,6 +1,7 @@
 const path = require("path");
 const express = require("express");
 const { MongoClient, ObjectId } = require("mongodb");
+const protocol = require("../Shared/protocol");
 
 const PORT = Number(process.env.PORT || 3000);
 const MONGODB_URI =
@@ -214,8 +215,20 @@ app.get("/api/status", async (_req, res, next) => {
   }
 });
 
+app.get("/api/protocol", (_req, res) => {
+  res.json({
+    sensorTypes: protocol.SENSOR_TYPES,
+    zones: protocol.ZONES,
+    sensorStates: protocol.SENSOR_STATES,
+    unitsByType: protocol.UNITS_BY_TYPE,
+    zoneLabels: protocol.ZONE_LABELS
+  });
+});
+
 // --------------------------- Estaticos --------------------------------
+const SHARED_DIR = path.join(__dirname, "..", "Shared");
 const PUBLIC_DIR = path.join(__dirname, "public");
+app.use("/shared", express.static(SHARED_DIR));
 app.use(express.static(PUBLIC_DIR));
 
 // SPA fallback (hash router): qualquer rota nao-API devolve o index.

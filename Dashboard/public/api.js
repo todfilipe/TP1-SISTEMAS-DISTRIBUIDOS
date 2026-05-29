@@ -9,27 +9,15 @@
   'use strict';
 
   // ------------------------ Enums --------------------------------------
-  const TIPOS = ['TEMP', 'HUM', 'RUIDO', 'PM2.5', 'PM10', 'LUZ', 'AR'];
-  const UNIDADES = {
-    'TEMP': '°C',
-    'HUM': '%',
-    'RUIDO': 'dB',
-    'PM2.5': 'µg/m³',
-    'PM10': 'µg/m³',
-    'LUZ': 'lux',
-    'AR': 'índice',
-  };
-  const ZONAS = ['ZONA_CENTRO', 'ZONA_ESCOLAR', 'ZONA_INDUSTRIAL', 'ZONA_RESIDENCIAL', 'ZONA_PARQUE'];
+  const PROTOCOL = window.ProtocolConstants;
+  const TIPOS = PROTOCOL.SENSOR_TYPES;
+  const UNIDADES = PROTOCOL.UNITS_BY_TYPE;
+  const ZONAS = PROTOCOL.ZONES;
+  const ESTADOS = PROTOCOL.SENSOR_STATES;
   const ESTRATEGIAS = ['linear', 'ewma'];
   const FORMATOS = ['JSON', 'XML', 'CSV'];
 
-  const ZONA_LABEL = {
-    'ZONA_CENTRO': 'Centro',
-    'ZONA_ESCOLAR': 'Escolar',
-    'ZONA_INDUSTRIAL': 'Industrial',
-    'ZONA_RESIDENCIAL': 'Residencial',
-    'ZONA_PARQUE': 'Parque',
-  };
+  const ZONA_LABEL = PROTOCOL.ZONE_LABELS;
 
   // ----------------------- Limiares ------------------------------------
   // Devolve "NORMAL" | "WARNING" | "CRITICAL" (espelha o serviço de análise Python)
@@ -216,7 +204,7 @@
   // -------- API pública ------------------------------------------------
   const api = {
     // dicionários e helpers
-    TIPOS, UNIDADES, ZONAS, ESTRATEGIAS, FORMATOS, ZONA_LABEL,
+    TIPOS, UNIDADES, ZONAS, ESTADOS, ESTRATEGIAS, FORMATOS, ZONA_LABEL,
     classifyAlert, worstAlert,
 
     async getReadings(filters = {}) {

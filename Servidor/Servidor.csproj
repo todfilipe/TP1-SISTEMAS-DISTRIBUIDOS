@@ -35,4 +35,9 @@
     <Protobuf Include="..\proto\analysis.proto" GrpcServices="Both" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="..\Shared\SensorTypes.cs" Link="Shared\SensorTypes.cs" />
+    <Compile Include="..\Shared\ProtocolConstants.cs" Link="Shared\ProtocolConstants.cs" />
+  </ItemGroup>
+
 </Project>

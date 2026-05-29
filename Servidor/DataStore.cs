@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using Dapper;
 using Microsoft.Data.Sqlite;
+using Shared;
 
 namespace Servidor
 {
@@ -25,20 +26,6 @@ namespace Servidor
     {
         private readonly string _dataDirectory;
         private readonly string _connectionString;
-
-        // Tipos de dados válidos definidos no protocolo
-        private static readonly HashSet<string> TiposValidos = new()
-        {
-            "TEMP", "HUM", "AR", "RUIDO", "PM2.5", "PM10", "LUZ", "VIDEO"
-        };
-
-        // Zonas válidas definidas no protocolo
-        private static readonly HashSet<string> ZonasValidas = new()
-        {
-            "ZONA_CENTRO", "ZONA_ESCOLAR", "ZONA_INDUSTRIAL",
-            "ZONA_RESIDENCIAL", "ZONA_PARQUE"
-        };
-
         public DataStore(string? dataDirectory = null)
         {
             // Usar caminho relativo ao executável em vez de depender do working directory
@@ -97,14 +84,14 @@ namespace Servidor
         public ResultadoArmazenamento ArmazenarMedicao(string sensorId, string tipoDado, string valor, string zona, string timestamp)
         {
             // Validar tipo de dado
-            if (!TiposValidos.Contains(tipoDado))
+            if (!ProtocolConstants.IsValidSensorType(tipoDado))
             {
                 Console.WriteLine($"[DataStore] Tipo de dado inválido: {tipoDado}");
                 return ResultadoArmazenamento.DadosInvalidos;
             }
 
             // Validar zona
-            if (!ZonasValidas.Contains(zona))
+            if (!ProtocolConstants.IsValidZone(zona))
             {
                 Console.WriteLine($"[DataStore] Zona inválida: {zona}");
                 return ResultadoArmazenamento.DadosInvalidos;

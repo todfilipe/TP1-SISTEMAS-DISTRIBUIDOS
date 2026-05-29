@@ -1,5 +1,7 @@
 namespace Sensor;
 
+using Shared;
+
 /// <summary>
 /// Interface de texto simples para o utilizador interagir com o Sensor.
 /// Permite simular o envio de dados ambientais ao Gateway.
@@ -7,13 +9,6 @@ namespace Sensor;
 public class SensorCLI
 {
     private SensorClient? _sensor;
-
-    // Tipos e zonas válidos segundo o protocolo
-    private static readonly string[] TiposValidos =
-        { "TEMP", "HUM", "AR", "RUIDO", "PM2.5", "PM10", "LUZ", "VIDEO" };
-
-    private static readonly string[] ZonasValidas =
-        { "ZONA_CENTRO", "ZONA_ESCOLAR", "ZONA_INDUSTRIAL", "ZONA_RESIDENCIAL", "ZONA_PARQUE" };
 
     private int _videoPort = 8081;
 
@@ -29,8 +24,8 @@ public class SensorCLI
         // Pedir tipos de dados
         Console.WriteLine();
         Console.WriteLine("Tipos de dados disponíveis:");
-        for (int i = 0; i < TiposValidos.Length; i++)
-            Console.WriteLine($"  {i + 1}. {TiposValidos[i]}");
+        for (int i = 0; i < ProtocolConstants.SensorTypes.Length; i++)
+            Console.WriteLine($"  {i + 1}. {ProtocolConstants.SensorTypes[i]}");
 
         string tiposInput = PedirInput("Escolha os tipos (números separados por vírgula, ex: 1,2,4)");
         List<string> tiposSelecionados = ParseTipos(tiposInput);
@@ -182,8 +177,8 @@ public class SensorCLI
 
         // Zona
         Console.WriteLine("Zonas disponíveis:");
-        for (int i = 0; i < ZonasValidas.Length; i++)
-            Console.WriteLine($"  {i + 1}. {ZonasValidas[i]}");
+        for (int i = 0; i < ProtocolConstants.Zones.Length; i++)
+            Console.WriteLine($"  {i + 1}. {ProtocolConstants.Zones[i]}");
 
         string zonaInput = PedirInput("Zona (número ou nome)");
         string zona = ResolveZona(zonaInput);
@@ -251,9 +246,9 @@ public class SensorCLI
 
         foreach (var part in parts)
         {
-            if (int.TryParse(part, out int idx) && idx >= 1 && idx <= TiposValidos.Length)
-                result.Add(TiposValidos[idx - 1]);
-            else if (TiposValidos.Contains(part.ToUpper()))
+            if (int.TryParse(part, out int idx) && idx >= 1 && idx <= ProtocolConstants.SensorTypes.Length)
+                result.Add(ProtocolConstants.SensorTypes[idx - 1]);
+            else if (ProtocolConstants.IsValidSensorType(part))
                 result.Add(part.ToUpper());
         }
 
@@ -274,11 +269,11 @@ public class SensorCLI
 
     private static string ResolveZona(string input)
     {
-        if (int.TryParse(input, out int idx) && idx >= 1 && idx <= ZonasValidas.Length)
-            return ZonasValidas[idx - 1];
+        if (int.TryParse(input, out int idx) && idx >= 1 && idx <= ProtocolConstants.Zones.Length)
+            return ProtocolConstants.Zones[idx - 1];
 
         string upper = input.ToUpper();
-        if (ZonasValidas.Contains(upper))
+        if (ProtocolConstants.IsValidZone(upper))
             return upper;
 
         return string.Empty;

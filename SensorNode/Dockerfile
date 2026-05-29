@@ -1,10 +1,11 @@
 FROM node:20-alpine
 
-WORKDIR /app
+WORKDIR /app/SensorNode
 
-COPY package.json ./
+COPY SensorNode/package.json ./
 RUN npm install --omit=dev
 
-COPY . .
+COPY SensorNode ./
+COPY Shared/protocol.js ../Shared/protocol.js
 
 CMD ["npm", "start"]

@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Threading;
+using Shared;
 
 namespace Gateway
 {
@@ -13,8 +15,10 @@ namespace Gateway
     /// Formato CSV: sensor_id:estado:zona:[tipos_dados]:last_sync
     /// Exemplo:     S101:ativo:ZONA_CENTRO:[TEMP,HUM,RUIDO]:2026-03-10T08:45:00
     /// </summary>
-    public class SensorConfigManager
+    public class SensorConfigManager : IDisposable
     {
+        private static readonly TimeSpan FlushInterval = TimeSpan.FromSeconds(10);
+
         // Caminho para o ficheiro CSV
         private readonly string _filePath;
 
@@ -26,6 +30,9 @@ namespace Gateway
         // sincronização inter-processo (um Mutex nomeado podia ficar bloqueado para
         // sempre se uma exceção ocorresse antes do release).
         private readonly object _syncObj = new object();
+        private readonly Timer _flushTimer;
+        private bool _dirty;
+        private bool _disposed;
 
         /// <summary>
         /// Inicializa o gestor com o caminho do ficheiro CSV.
@@ -35,6 +42,7 @@ namespace Gateway
         {
             _filePath = filePath ?? throw new ArgumentNullException(nameof(filePath));
             _sensors = new Dictionary<string, SensorConfig>(StringComparer.OrdinalIgnoreCase);
+            _flushTimer = new Timer(_ => FlushPendingChanges(), null, FlushInterval, FlushInterval);
         }
 
         // ─────────────────────────────────────────────
@@ -211,7 +219,7 @@ namespace Gateway
         // ─────────────────────────────────────────────
 
         /// <summary>
-        /// Atualiza o campo last_sync de um sensor em memória e persiste no ficheiro CSV.
+        /// Atualiza o campo last_sync de um sensor em memória e agenda a persistência no ficheiro CSV.
         /// </summary>
         /// <param name="sensorId">Identificador do sensor.</param>
         /// <param name="timestamp">Nova data/hora de sincronização.</param>
@@ -229,8 +237,7 @@ namespace Gateway
                 _sensors[sensorId].LastSync = timestamp;
                 Console.WriteLine($"[CONFIG] Sensor '{sensorId}' — last_sync atualizado para {timestamp:yyyy-MM-ddTHH:mm:ss}.");
 
-                // Persistir imediatamente no ficheiro
-                SaveToFile();
+                MarkDirty();
                 return true;
             }
         }
@@ -241,7 +248,7 @@ namespace Gateway
 
         /// <summary>
         /// Altera o estado de um sensor (ativo, manutencao, desativado, indisponivel, desligado).
-        /// A alteração é persistida no ficheiro CSV.
+        /// A alteração é persistida no ficheiro CSV pelo flush periódico.
         /// </summary>
         /// <param name="sensorId">Identificador do sensor.</param>
         /// <param name="novoEstado">Novo estado a atribuir.</param>
@@ -249,12 +256,11 @@ namespace Gateway
         public bool ChangeSensorStatus(string sensorId, string novoEstado)
         {
             // Validar os estados permitidos
-            string[] estadosValidos = { "ativo", "manutencao", "desativado", "indisponivel", "desligado" };
             string estadoLower = novoEstado?.ToLower();
 
-            if (Array.IndexOf(estadosValidos, estadoLower) < 0)
+            if (!ProtocolConstants.IsValidSensorState(estadoLower))
             {
-                Console.WriteLine($"[CONFIG] ERRO: Estado inválido '{novoEstado}'. Valores permitidos: {string.Join(", ", estadosValidos)}.");
+                Console.WriteLine($"[CONFIG] ERRO: Estado inválido '{novoEstado}'. Valores permitidos: {string.Join(", ", ProtocolConstants.SensorStates)}.");
                 return false;
             }
 
@@ -270,8 +276,7 @@ namespace Gateway
                 _sensors[sensorId].Estado = estadoLower;
                 Console.WriteLine($"[CONFIG] Sensor '{sensorId}' — estado alterado de '{estadoAnterior}' para '{estadoLower}'.");
 
-                // Persistir imediatamente no ficheiro
-                SaveToFile();
+                MarkDirty();
                 return true;
             }
         }
@@ -331,10 +336,30 @@ namespace Gateway
         // ─────────────────────────────────────────────
 
         /// <summary>
-        /// Escreve todos os sensores em memória de volta no ficheiro CSV.
-        /// NOTA: Deve ser chamado dentro do lock.
+        /// Marca a configuração em memória como pendente de persistência.
         /// </summary>
-        private void SaveToFile()
+        private void MarkDirty()
+        {
+            _dirty = true;
+        }
+
+        public void FlushPendingChanges()
+        {
+            lock (_syncObj)
+            {
+                if (!_dirty)
+                {
+                    return;
+                }
+
+                if (SaveToFile())
+                {
+                    _dirty = false;
+                }
+            }
+        }
+
+        private bool SaveToFile()
         {
             try
             {
@@ -351,11 +376,25 @@ namespace Gateway
 
                 File.WriteAllLines(_filePath, lines);
                 Console.WriteLine($"[CONFIG] Ficheiro '{_filePath}' atualizado com sucesso ({_sensors.Count} sensor(es)).");
+                return true;
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[CONFIG] ERRO ao escrever ficheiro '{_filePath}': {ex.Message}");
+                return false;
             }
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _flushTimer.Dispose();
+            FlushPendingChanges();
+            _disposed = true;
         }
     }
 }

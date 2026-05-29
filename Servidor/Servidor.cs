@@ -1,17 +1,10 @@
-using Grpc.Net.Client;
-using Grpc.Core;
 using Analysis;
-using Google.Protobuf;
-using Microsoft.Extensions.Configuration;
 using MongoDB.Bson;
-using Polly;
-using Polly.Retry;
 using Servidor.Mongo;
-using Servidor.Mongo.Models;
 using Servidor.Mongo.Repositories;
+using Shared;
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -32,6 +25,8 @@ namespace Servidor
         private readonly ReadingsRepository? _readingsRepository;
         private readonly AnalysesRepository? _analysesRepository;
         private readonly SensorsMetadataRepository? _sensorsMetadataRepository;
+        private readonly MongoReadingPersister _mongoPersister;
+        private readonly AnalysisOrchestrator _analysisOrchestrator;
         private readonly CliHandler _cliHandler;
         private TcpListener? _listener;
         private volatile bool _running;
@@ -40,56 +35,13 @@ namespace Servidor
         private readonly HashSet<string> _gatewaysLigados = new();
         private readonly object _gwListLock = new();
 
-        // Estados válidos para SENSOR_STATUS (estático para evitar recriação)
-        private static readonly HashSet<string> EstadosValidos = new()
-        {
-            "ativo", "manutencao", "desativado", "indisponivel", "desligado"
-        };
-
-                // gRPC Analysis Service configuration.
-        // URL lido do appsettings.json; a variável de ambiente ANALYSIS_SERVICE_URL
-        // funciona como sobrescrita (override), tal como noutros componentes do projeto.
-        private static string AnalysisServiceUrl = CarregarAnalysisServiceUrl();
-        private static GrpcChannel? _analysisChannel;
-        private static AnalysisService.AnalysisServiceClient? _analysisClient;
-
-        private static readonly List<AnalysisResult> HistoricoAnalises = new();
-        private static readonly List<PredictionResult> HistoricoPrevisoes = new();
-        private static readonly object HistoricoLock = new();
-
-        // Pipeline de resiliência Polly para chamadas gRPC ao serviço de Análise.
-        // Retry exponencial: 3 tentativas com backoff de 1/2/4 segundos.
-        // Filosofia idêntica à do Gateway (paridade entre componentes).
-        private static readonly ResiliencePipeline _grpcPipeline =
-            new ResiliencePipelineBuilder()
-                .AddRetry(new RetryStrategyOptions
-                {
-                    ShouldHandle = new PredicateBuilder()
-                        .Handle<RpcException>(ex => ex.StatusCode == StatusCode.Unavailable ||
-                                                    ex.StatusCode == StatusCode.DeadlineExceeded ||
-                                                    ex.StatusCode == StatusCode.Internal)
-                        .Handle<Exception>(),
-                    MaxRetryAttempts = 3,
-                    BackoffType = DelayBackoffType.Exponential,
-                    UseJitter = false,
-                    Delay = TimeSpan.FromSeconds(1),
-                    OnRetry = args =>
-                    {
-                        Console.WriteLine($"[Servidor][Polly] Tentativa {args.AttemptNumber + 1} falhou. " +
-                                          $"Nova tentativa em {args.RetryDelay.TotalSeconds}s. Erro: {args.Outcome.Exception?.Message}");
-                        return default;
-                    }
-                })
-                .AddTimeout(TimeSpan.FromSeconds(10))
-                .Build();
-
-        private static readonly TimeSpan MongoWriteTimeout = TimeSpan.FromSeconds(5);
-
         public ServidorTCP(int porta = 9090)
         {
             _porta = porta;
             _dataStore = new DataStore();
             (_, _readingsRepository, _analysesRepository, _sensorsMetadataRepository) = InicializarMongo();
+            _mongoPersister = new MongoReadingPersister(_readingsRepository, _analysesRepository, _sensorsMetadataRepository);
+            _analysisOrchestrator = new AnalysisOrchestrator(_readingsRepository, _mongoPersister);
             _cliHandler = new CliHandler(this);
         }
 
@@ -111,10 +63,7 @@ namespace Servidor
 
         internal (IReadOnlyList<AnalysisResult> Analises, IReadOnlyList<PredictionResult> Previsoes) ObterHistorico()
         {
-            lock (HistoricoLock)
-            {
-                return (HistoricoAnalises.ToList(), HistoricoPrevisoes.ToList());
-            }
+            return _analysisOrchestrator.ObterHistorico();
         }
 
         /// <summary>
@@ -122,7 +71,7 @@ namespace Servidor
         /// </summary>
         public void Iniciar()
         {
-            InicializarClienteAnalise();
+            _analysisOrchestrator.Initialize();
             _listener = new TcpListener(IPAddress.Any, _porta);
             _listener.Start();
             _running = true;
@@ -171,34 +120,6 @@ namespace Servidor
             }
         }
 
-        // Lê o URL do serviço de Análise a partir do appsettings.json (secção AnalysisService:Url),
-        // dando precedência à variável de ambiente ANALYSIS_SERVICE_URL como override.
-        private static string CarregarAnalysisServiceUrl()
-        {
-            var config = new ConfigurationBuilder()
-                .SetBasePath(AppDomain.CurrentDomain.BaseDirectory)
-                .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
-                .Build();
-
-            return Environment.GetEnvironmentVariable("ANALYSIS_SERVICE_URL")
-                ?? config["AnalysisService:Url"]
-                ?? "http://localhost:50052";
-        }
-
-        private static void InicializarClienteAnalise()
-        {
-            try
-            {
-                _analysisChannel = GrpcChannel.ForAddress(AnalysisServiceUrl);
-                _analysisClient = new AnalysisService.AnalysisServiceClient(_analysisChannel);
-                Console.WriteLine($"[Servidor] Cliente gRPC de Análise inicializado para: {AnalysisServiceUrl}");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[ERRO] Falha ao inicializar o cliente gRPC de Análise: {ex.Message}");
-            }
-        }
-
         private static (MongoDbContext? Context, ReadingsRepository? Readings, AnalysesRepository? Analyses, SensorsMetadataRepository? SensorsMetadata) InicializarMongo()
         {
             try
@@ -230,501 +151,17 @@ namespace Servidor
 
         internal AnalysisResult? ExecutarAnalise(string tipo, string zona, string sensorId, string dateFrom, string dateTo)
         {
-            if (_analysisClient == null)
-            {
-                Console.WriteLine("[ERRO] Cliente gRPC de Análise não está inicializado.");
-                return null;
-            }
-
-            var request = new AnalysisRequest
-            {
-                Type = tipo ?? "",
-                Zone = zona ?? "",
-                SensorId = sensorId ?? "",
-                DateFrom = dateFrom ?? "",
-                DateTo = dateTo ?? ""
-            };
-
-            // Recolher as leituras do MongoDB e enviá-las no request.
-            // O serviço de Análise é puro: não conhece a BD, apenas calcula sobre os dados recebidos.
-            var readings = ObterReadingsMongoParaGrpc(tipo, zona, sensorId, dateFrom, dateTo, "análise", out string? erroMongo);
-            if (erroMongo != null)
-            {
-                var falhaMongo = CriarFalhaAnalise(erroMongo);
-                GuardarResultadoAnalise(falhaMongo, request);
-                return falhaMongo;
-            }
-
-            foreach (var reading in readings)
-            {
-                request.Readings.Add(reading);
-            }
-            Console.WriteLine($"[Servidor] {request.Readings.Count} leitura(s) recolhida(s) do MongoDB/readings para análise.");
-
-            Console.WriteLine($"[Servidor] A enviar pedido de análise ao AnalysisService gRPC (com resiliência Polly)...");
-            try
-            {
-                // Envolver a chamada gRPC no pipeline Polly (retry exponencial 1/2/4s).
-                AnalysisResult response = _grpcPipeline.Execute(() => _analysisClient.Analyze(request));
-                GuardarResultadoAnalise(response, request);
-                PersistirAnaliseMongoAsync(response, request).GetAwaiter().GetResult();
-                return response;
-            }
-            catch (Exception ex)
-            {
-                // Falha após todas as tentativas: regista e devolve um resultado de falha
-                // (sem rebentar o programa).
-                Console.WriteLine($"[ERRO gRPC] Falha ao executar análise via gRPC após retentativas: {ex.Message}");
-                var falha = new AnalysisResult
-                {
-                    ResultSummary = $"FALHA: serviço de Análise indisponível após 3 tentativas ({ex.Message}).",
-                    ComputedAverage = 0.0,
-                    AlertLevel = "UNKNOWN",
-                    Timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
-                };
-                GuardarResultadoAnalise(falha, request);
-                return falha;
-            }
+            return _analysisOrchestrator.ExecutarAnalise(tipo, zona, sensorId, dateFrom, dateTo);
         }
 
-        // Aceita apenas "linear" ou "ewma"; qualquer outro valor (ou vazio) recai em "linear".
         internal static string NormalizarEstrategia(string? input)
         {
-            string s = (input ?? "").Trim().ToLower();
-            return s == "ewma" ? "ewma" : "linear";
+            return ProtocolHelpers.NormalizarEstrategia(input);
         }
 
         internal PredictionResult? ExecutarPrevisao(string tipo, string zona, int periodos, string strategy = "linear")
         {
-            if (_analysisClient == null)
-            {
-                Console.WriteLine("[ERRO] Cliente gRPC de Análise não está inicializado.");
-                return null;
-            }
-
-            var request = new PredictionRequest
-            {
-                Type = tipo ?? "",
-                Zone = zona ?? "",
-                PeriodsToPredict = periodos,
-                Strategy = strategy
-            };
-
-            // Recolher o histórico do MongoDB e enviá-lo no request.
-            var readings = ObterReadingsMongoParaGrpc(tipo, zona, null, null, null, "previsão", out string? erroMongo);
-            if (erroMongo != null)
-            {
-                var falhaMongo = CriarFalhaPrevisao(erroMongo, request.Strategy);
-                GuardarResultadoPrevisao(falhaMongo, request);
-                return falhaMongo;
-            }
-
-            foreach (var reading in readings)
-            {
-                request.Readings.Add(reading);
-            }
-            Console.WriteLine($"[Servidor] {request.Readings.Count} leitura(s) histórica(s) recolhida(s) do MongoDB/readings para previsão.");
-
-            Console.WriteLine($"[Servidor] A enviar pedido de previsão ao AnalysisService gRPC (com resiliência Polly)...");
-            try
-            {
-                PredictionResult response = _grpcPipeline.Execute(() => _analysisClient.Predict(request));
-                GuardarResultadoPrevisao(response, request);
-                return response;
-            }
-            catch (Exception ex)
-            {
-                // Falha após todas as tentativas: regista e devolve um resultado de falha.
-                Console.WriteLine($"[ERRO gRPC] Falha ao executar previsão via gRPC após retentativas: {ex.Message}");
-                Console.WriteLine($"  Sumário: FALHA: serviço de Análise indisponível após 3 tentativas ({ex.Message}).");
-
-                var falha = new PredictionResult
-                {
-                    PredictionSummary = $"FALHA: serviço de Análise indisponível após 3 tentativas ({ex.Message}).",
-                    StrategyUsed = request.Strategy,
-                    Timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
-                };
-                GuardarResultadoPrevisao(falha, request);
-                return falha;
-            }
-        }
-
-        private IReadOnlyList<Reading> ObterReadingsMongoParaGrpc(
-            string? tipo,
-            string? zona,
-            string? sensorId,
-            string? dateFrom,
-            string? dateTo,
-            string operacao,
-            out string? erro)
-        {
-            erro = null;
-
-            if (_readingsRepository == null)
-            {
-                erro = $"FALHA: repositório MongoDB de leituras indisponível; não foi possível carregar dados da coleção readings para {operacao}. SQLite não foi usado como fonte principal.";
-                Console.WriteLine($"[AVISO][MongoDB] {erro}");
-                return Array.Empty<Reading>();
-            }
-
-            string? normalizedType = NormalizarFiltroOpcional(tipo);
-            string? normalizedZone = NormalizarFiltroOpcional(zona);
-            string? normalizedSensorId = NormalizarFiltroOpcional(sensorId);
-
-            if (!TryParseFiltroTemporal(dateFrom, out DateTime? from, out string? erroFrom))
-            {
-                erro = $"FALHA: filtro temporal inicial inválido para consulta MongoDB/readings: '{dateFrom}'.";
-                Console.WriteLine($"[AVISO][MongoDB] {erroFrom}");
-                return Array.Empty<Reading>();
-            }
-
-            if (!TryParseFiltroTemporal(dateTo, out DateTime? to, out string? erroTo))
-            {
-                erro = $"FALHA: filtro temporal final inválido para consulta MongoDB/readings: '{dateTo}'.";
-                Console.WriteLine($"[AVISO][MongoDB] {erroTo}");
-                return Array.Empty<Reading>();
-            }
-
-            try
-            {
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-                var documentos = _readingsRepository.FindAsync(
-                    sensorId: normalizedSensorId,
-                    zone: normalizedZone,
-                    type: normalizedType,
-                    from: from,
-                    to: to,
-                    cancellationToken: cts.Token).GetAwaiter().GetResult();
-
-                if (documentos.Count == 0)
-                {
-                    erro = $"FALHA: não existem leituras na coleção MongoDB/readings para {operacao} com os filtros {DescreverFiltros(normalizedType, normalizedZone, normalizedSensorId, from, to)}. SQLite não foi consultado.";
-                    Console.WriteLine($"[AVISO][MongoDB] {erro}");
-                    return Array.Empty<Reading>();
-                }
-
-                return documentos
-                    .OrderBy(reading => reading.Timestamp)
-                    .Select(MapearReadingMongoParaGrpc)
-                    .ToList();
-            }
-            catch (Exception ex)
-            {
-                erro = $"FALHA: MongoDB inacessível ao consultar a coleção readings para {operacao}: {ex.Message}. SQLite não foi consultado.";
-                Console.WriteLine($"[AVISO][MongoDB] {erro}");
-                return Array.Empty<Reading>();
-            }
-        }
-
-        private static Reading MapearReadingMongoParaGrpc(ReadingDocument reading)
-        {
-            return new Reading
-            {
-                Value = reading.Value,
-                Timestamp = reading.Timestamp.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture),
-                Type = reading.Type ?? "",
-                SensorId = reading.SensorId ?? "",
-                Zone = reading.Zone ?? ""
-            };
-        }
-
-        private static AnalysisResult CriarFalhaAnalise(string mensagem)
-        {
-            return new AnalysisResult
-            {
-                ResultSummary = mensagem,
-                ComputedAverage = 0.0,
-                AlertLevel = "UNKNOWN",
-                Timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture),
-                SampleCount = 0
-            };
-        }
-
-        private static PredictionResult CriarFalhaPrevisao(string mensagem, string strategy)
-        {
-            return new PredictionResult
-            {
-                PredictionSummary = mensagem,
-                StrategyUsed = strategy,
-                Timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture)
-            };
-        }
-
-        private static string? NormalizarFiltroOpcional(string? value)
-        {
-            return string.IsNullOrWhiteSpace(value) || value.Trim() == "-" ? null : value.Trim();
-        }
-
-        private static bool TryParseFiltroTemporal(string? value, out DateTime? parsed, out string? erro)
-        {
-            parsed = null;
-            erro = null;
-
-            string? normalized = NormalizarFiltroOpcional(value);
-            if (normalized == null)
-            {
-                return true;
-            }
-
-            if (TryParseUtc(normalized, out DateTime parsedDate))
-            {
-                parsed = parsedDate;
-                return true;
-            }
-
-            erro = $"Filtro temporal inválido: '{value}'.";
-            return false;
-        }
-
-        private static string DescreverFiltros(string? tipo, string? zona, string? sensorId, DateTime? from, DateTime? to)
-        {
-            var filtros = new List<string>();
-
-            if (!string.IsNullOrWhiteSpace(tipo)) filtros.Add($"tipo='{tipo}'");
-            if (!string.IsNullOrWhiteSpace(zona)) filtros.Add($"zona='{zona}'");
-            if (!string.IsNullOrWhiteSpace(sensorId)) filtros.Add($"sensorId='{sensorId}'");
-            if (from.HasValue) filtros.Add($"from='{from.Value:yyyy-MM-ddTHH:mm:ssZ}'");
-            if (to.HasValue) filtros.Add($"to='{to.Value:yyyy-MM-ddTHH:mm:ssZ}'");
-
-            return filtros.Count == 0 ? "sem filtros" : string.Join(", ", filtros);
-        }
-
-        private void GuardarResultadoAnalise(AnalysisResult result, AnalysisRequest request)
-        {
-            lock (HistoricoLock)
-            {
-                HistoricoAnalises.Add(result);
-            }
-
-            try
-            {
-                string logFile = "analysis_history.log";
-                using (var writer = new StreamWriter(logFile, append: true, System.Text.Encoding.UTF8))
-                {
-                    writer.WriteLine($"=== ANALISE EFECTUADA EM {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC ===");
-                    writer.WriteLine($"Request - Tipo: {request.Type}, Zona: {request.Zone}, Sensor: {request.SensorId}, From: {request.DateFrom}, To: {request.DateTo}");
-                    writer.WriteLine($"Result  - Summary: {result.ResultSummary}");
-                    writer.WriteLine($"Result  - Average: {result.ComputedAverage:F2}");
-                    writer.WriteLine($"Result  - Median: {result.Median:F2}");
-                    writer.WriteLine($"Result  - Percentiles: P25={result.Percentile25:F2}, P75={result.Percentile75:F2}, P95={result.Percentile95:F2}");
-                    writer.WriteLine($"Result  - Alert Level: {result.AlertLevel}");
-                    writer.WriteLine($"Result  - Timestamp: {result.Timestamp}");
-                    writer.WriteLine("==================================================");
-                    writer.WriteLine();
-                }
-                Console.WriteLine($"[Servidor] Resultado da análise guardado em '{logFile}' e em memória.");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[ERRO] Falha ao guardar resultado da análise no ficheiro: {ex.Message}");
-            }
-        }
-
-        private async Task<bool> PersistirLeituraMongoAsync(
-            string sensorId,
-            string tipoDado,
-            string valor,
-            string zona,
-            string timestamp,
-            string gatewayId,
-            string mensagemOriginal)
-        {
-            if (_readingsRepository == null)
-            {
-                Console.WriteLine("[AVISO][MongoDB] Repositório de leituras indisponível. Leitura guardada apenas no SQLite local.");
-                return false;
-            }
-
-            bool readingPersisted = false;
-
-            try
-            {
-                if (!double.TryParse(valor, NumberStyles.Any, CultureInfo.InvariantCulture, out double valorNumerico))
-                {
-                    Console.WriteLine($"[ERRO][MongoDB] Valor inválido para persistência MongoDB: {valor}. Leitura guardada apenas no SQLite local.");
-                    return false;
-                }
-
-                DateTime timestampUtc = ParseDateTimeOrUtcNow(timestamp);
-
-                var reading = new ReadingDocument
-                {
-                    SensorId = sensorId,
-                    Zone = zona,
-                    Type = tipoDado,
-                    Value = valorNumerico,
-                    Unit = InferirUnidade(tipoDado),
-                    Timestamp = timestampUtc,
-                    GatewayId = gatewayId,
-                    OriginalMessageFormat = mensagemOriginal,
-                    CreatedAt = DateTime.UtcNow
-                };
-
-                using var cts = new CancellationTokenSource(MongoWriteTimeout);
-                await _readingsRepository.InsertAsync(reading, cts.Token);
-                readingPersisted = true;
-                Console.WriteLine($"[Servidor][MongoDB] Leitura persistida em readings: sensor={sensorId}, tipo={tipoDado}, zona={zona}, timestamp={timestampUtc:yyyy-MM-ddTHH:mm:ssZ}.");
-
-                if (_sensorsMetadataRepository == null)
-                {
-                    Console.WriteLine("[AVISO][MongoDB] Repositório de metadados indisponível. Leitura persistida em readings, mas sensors_metadata não foi atualizado.");
-                    return true;
-                }
-
-                await _sensorsMetadataRepository.UpsertObservationAsync(sensorId, zona, tipoDado, timestampUtc, cts.Token);
-                Console.WriteLine($"[Servidor][MongoDB] Metadados do sensor atualizados: sensor={sensorId}.");
-                return true;
-            }
-            catch (OperationCanceledException ex)
-            {
-                string impacto = readingPersisted
-                    ? "Leitura persistida em readings, mas a atualização de sensors_metadata não foi confirmada."
-                    : "Leitura guardada apenas no SQLite local.";
-                Console.WriteLine($"[ERRO][MongoDB] Timeout ao persistir leitura após {MongoWriteTimeout.TotalSeconds:0}s: {ex.Message}. {impacto}");
-                return false;
-            }
-            catch (Exception ex)
-            {
-                string impacto = readingPersisted
-                    ? "Leitura persistida em readings, mas a atualização de sensors_metadata falhou."
-                    : "Leitura guardada apenas no SQLite local.";
-                Console.WriteLine($"[ERRO][MongoDB] Falha ao persistir leitura no MongoDB: {ex.GetType().Name}: {ex.Message}. {impacto}");
-                return false;
-            }
-        }
-
-        private async Task<bool> PersistirAnaliseMongoAsync(AnalysisResult result, AnalysisRequest request)
-        {
-            if (_analysesRepository == null)
-            {
-                Console.WriteLine("[AVISO][MongoDB] Repositório de análises indisponível. Resultado mantido apenas em memória/ficheiro local.");
-                return false;
-            }
-
-            try
-            {
-                DateTime windowStart = ResolveWindowBoundary(request.DateFrom, request.Readings.Select(r => r.Timestamp), useMinimum: true);
-                DateTime windowEnd = ResolveWindowBoundary(request.DateTo, request.Readings.Select(r => r.Timestamp), useMinimum: false);
-
-                var analysis = new AnalysisDocument
-                {
-                    SensorId = string.IsNullOrWhiteSpace(request.SensorId) ? null : request.SensorId,
-                    Zone = request.Zone,
-                    Type = request.Type,
-                    WindowStart = windowStart,
-                    WindowEnd = windowEnd,
-                    Average = result.Mean != 0 ? result.Mean : result.ComputedAverage,
-                    StandardDeviation = result.StdDev,
-                    Median = result.Median,
-                    Percentile25 = result.Percentile25,
-                    Percentile75 = result.Percentile75,
-                    Percentile95 = result.Percentile95,
-                    Min = result.Min,
-                    Max = result.Max,
-                    OutlierCount = result.OutliersCount,
-                    TrendSlope = result.TrendSlope,
-                    TrendClassification = result.Trend,
-                    SampleCount = result.SampleCount,
-                    MovingAverageLast = result.MovingAverageLast,
-                    AlertLevel = result.AlertLevel,
-                    CreatedAt = DateTime.UtcNow,
-                    RawGrpcResultSerialized = JsonFormatter.Default.Format(result)
-                };
-
-                using var cts = new CancellationTokenSource(MongoWriteTimeout);
-                await _analysesRepository.InsertAsync(analysis, cts.Token);
-                Console.WriteLine($"[Servidor][MongoDB] Análise persistida em analyses: tipo={request.Type}, zona={request.Zone}, janela={windowStart:yyyy-MM-ddTHH:mm:ssZ}->{windowEnd:yyyy-MM-ddTHH:mm:ssZ}.");
-                return true;
-            }
-            catch (OperationCanceledException ex)
-            {
-                Console.WriteLine($"[ERRO][MongoDB] Timeout ao persistir análise após {MongoWriteTimeout.TotalSeconds:0}s: {ex.Message}. Resultado mantido apenas em memória/ficheiro local.");
-                return false;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[ERRO][MongoDB] Falha ao persistir análise no MongoDB: {ex.GetType().Name}: {ex.Message}. Resultado mantido apenas em memória/ficheiro local.");
-                return false;
-            }
-        }
-
-        private static DateTime ResolveWindowBoundary(string candidate, IEnumerable<string> readingTimestamps, bool useMinimum)
-        {
-            if (!string.IsNullOrWhiteSpace(candidate) && TryParseUtc(candidate, out DateTime parsedCandidate))
-            {
-                return parsedCandidate;
-            }
-
-            var parsedReadings = readingTimestamps
-                .Where(ts => TryParseUtc(ts, out _))
-                .Select(ParseDateTimeOrUtcNow)
-                .ToList();
-
-            if (parsedReadings.Count == 0)
-            {
-                return DateTime.UtcNow;
-            }
-
-            return useMinimum ? parsedReadings.Min() : parsedReadings.Max();
-        }
-
-        private static DateTime ParseDateTimeOrUtcNow(string value)
-        {
-            return TryParseUtc(value, out DateTime parsed) ? parsed : DateTime.UtcNow;
-        }
-
-        private static bool TryParseUtc(string value, out DateTime parsed)
-        {
-            return DateTime.TryParse(
-                value,
-                CultureInfo.InvariantCulture,
-                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
-                out parsed);
-        }
-
-        private static string InferirUnidade(string tipoDado)
-        {
-            return tipoDado.ToUpperInvariant() switch
-            {
-                "TEMP" => "C",
-                "HUM" => "%",
-                "AR" => "AQI",
-                "RUIDO" => "dB",
-                "PM2.5" => "ug/m3",
-                "PM10" => "ug/m3",
-                "LUZ" => "lux",
-                "VIDEO" => "frame",
-                _ => string.Empty
-            };
-        }
-
-        private void GuardarResultadoPrevisao(PredictionResult result, PredictionRequest request)
-        {
-            lock (HistoricoLock)
-            {
-                HistoricoPrevisoes.Add(result);
-            }
-
-            try
-            {
-                string logFile = "prediction_history.log";
-                using (var writer = new StreamWriter(logFile, append: true, System.Text.Encoding.UTF8))
-                {
-                    writer.WriteLine($"=== PREVISAO EFECTUADA EM {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC ===");
-                    writer.WriteLine($"Request - Tipo: {request.Type}, Zona: {request.Zone}, Periodos: {request.PeriodsToPredict}, Estrategia: {request.Strategy}");
-                    writer.WriteLine($"Result  - Summary: {result.PredictionSummary}");
-                    writer.WriteLine($"Result  - Strategy Used: {result.StrategyUsed}");
-                    writer.WriteLine($"Result  - Forecast: {string.Join(", ", result.Forecast)}");
-                    writer.WriteLine($"Result  - Timestamp: {result.Timestamp}");
-                    writer.WriteLine("==================================================");
-                    writer.WriteLine();
-                }
-                Console.WriteLine($"[Servidor] Resultado da previsão guardado em '{logFile}' e em memória.");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[ERRO] Falha ao guardar resultado da previsão no ficheiro: {ex.Message}");
-            }
+            return _analysisOrchestrator.ExecutarPrevisao(tipo, zona, periodos, strategy);
         }
 
         /// <summary>
@@ -905,7 +342,7 @@ namespace Servidor
             switch (resultado)
             {
                 case ResultadoArmazenamento.Sucesso:
-                    bool mongoPersisted = PersistirLeituraMongoAsync(sensorId, tipoDado, valor, zona, timestamp, gatewayId, string.Join(' ', partes))
+                    bool mongoPersisted = _mongoPersister.PersistirLeituraMongoAsync(sensorId, tipoDado, valor, zona, timestamp, gatewayId, string.Join(' ', partes))
                         .GetAwaiter()
                         .GetResult();
                     return ResolverRespostaPersistenciaMongo(mongoPersisted, gatewayId);
@@ -940,7 +377,7 @@ namespace Servidor
             switch (resultado)
             {
                 case ResultadoArmazenamento.Sucesso:
-                    bool mongoPersisted = PersistirLeituraMongoAsync("AGREGADO_" + gatewayId, tipoDado, valor, zona, timestamp, gatewayId, string.Join(' ', partes))
+                    bool mongoPersisted = _mongoPersister.PersistirLeituraMongoAsync("AGREGADO_" + gatewayId, tipoDado, valor, zona, timestamp, gatewayId, string.Join(' ', partes))
                         .GetAwaiter()
                         .GetResult();
                     return ResolverRespostaPersistenciaMongo(mongoPersisted, gatewayId);
@@ -979,7 +416,7 @@ namespace Servidor
             string estado = partes[2];
 
             // Validar estados possíveis
-            if (!EstadosValidos.Contains(estado))
+            if (!ProtocolConstants.IsValidSensorState(estado))
             {
                 Console.WriteLine($"[Servidor] SENSOR_STATUS: estado inválido '{estado}'.");
                 return "ERR_INVALID_DATA";
@@ -1024,3 +461,4 @@ namespace Servidor
         }
     }
 }
+

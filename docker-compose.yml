@@ -117,7 +117,9 @@ services:
 
   # Dashboard web - paginas HTML e JSON sobre os dados MongoDB
   dashboard:
-    build: ./Dashboard
+    build:
+      context: .
+      dockerfile: Dashboard/Dockerfile
     container_name: dashboard
     ports:
       - "3000:3000"
@@ -131,7 +133,9 @@ services:
     restart: unless-stopped
 
   sensor-node:
-    build: ./SensorNode
+    build:
+      context: .
+      dockerfile: SensorNode/Dockerfile
     container_name: sensor-node
     environment:
       SENSOR_ID: ${SENSOR_NODE_ID:-SNJ01}

@@ -7,6 +7,7 @@ using System.Security;
 using System.Text.Json;
 using System.Threading;
 using RabbitMQ.Client;
+using Shared;
 
 namespace Sensor;
 
@@ -237,7 +238,7 @@ public class SensorClient : IDisposable
 
         double valDouble = 0;
         double.TryParse(valor, NumberStyles.Float, CultureInfo.InvariantCulture, out valDouble);
-        string unit = GetUnitForType(tipo);
+        string unit = SensorTypes.GetUnitForType(tipo);
 
         lock (_sendLock)
         {
@@ -403,7 +404,7 @@ public class SensorClient : IDisposable
                     string resp = SendData(_type, valStr, _zone, ts);
                     if (resp == "OK")
                     {
-                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [DATA SENT] {_zone}.{_type}.{_sensorId} -> {valStr} {GetUnitForType(_type)}");
+                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [DATA SENT] {_zone}.{_type}.{_sensorId} -> {valStr} {SensorTypes.GetUnitForType(_type)}");
                         Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [PAYLOAD] rawFormat={_payloadFormat}");
                     }
                     else
@@ -614,20 +615,6 @@ public class SensorClient : IDisposable
         }
 
         return "ZONA_CENTRO";
-    }
-
-    private string GetUnitForType(string type)
-    {
-        return type.ToUpper() switch
-        {
-            "TEMP" => "C",
-            "HUM" => "%",
-            "RUIDO" => "dB",
-            "PM2.5" => "ug/m3",
-            "PM10" => "ug/m3",
-            "LUZ" => "lux",
-            _ => "n/a"
-        };
     }
 
     private string BuildRawPayload(string tipo, double valor, string unit, string zona, string timestamp)

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using Shared;
 
 namespace Gateway
 {
@@ -40,20 +41,10 @@ namespace Gateway
         // ─────────────────────────────────────────────────────────
 
         /// <summary>Zonas geográficas válidas no sistema.</summary>
-        internal static readonly HashSet<string> ZonasValidas = new HashSet<string>(StringComparer.Ordinal)
-        {
-            "ZONA_CENTRO",
-            "ZONA_ESCOLAR",
-            "ZONA_INDUSTRIAL",
-            "ZONA_RESIDENCIAL",
-            "ZONA_PARQUE"
-        };
+        internal static readonly IReadOnlySet<string> ZonasValidas = ProtocolConstants.ZoneSet;
 
         /// <summary>Tipos de dados globais reconhecidos pelo sistema.</summary>
-        internal static readonly HashSet<string> TiposGlobais = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "TEMP", "HUM", "AR", "RUIDO", "PM2.5", "PM10", "LUZ", "VIDEO"
-        };
+        internal static readonly IReadOnlySet<string> TiposGlobais = ProtocolConstants.SensorTypeSet;
 
         /// <summary>Tolerância máxima para timestamps no futuro (em segundos).</summary>
         private const int MAX_FUTURE_SECONDS = 60;

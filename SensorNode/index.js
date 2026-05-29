@@ -1,19 +1,16 @@
 const amqp = require("amqplib");
 const fs = require("fs");
 const path = require("path");
+const {
+  UNITS_BY_TYPE,
+  isValidSensorType,
+  isValidZone
+} = require("../Shared/protocol");
 
 const EXCHANGE_NAME = "sensors.exchange";
 const EXCHANGE_TYPE = "topic";
 const RECONNECT_DELAY_MS = 5000;
 
-const VALID_TYPES = new Set(["TEMP", "HUM", "AR", "RUIDO", "PM2.5", "PM10", "LUZ"]);
-const VALID_ZONES = new Set([
-  "ZONA_CENTRO",
-  "ZONA_ESCOLAR",
-  "ZONA_INDUSTRIAL",
-  "ZONA_RESIDENCIAL",
-  "ZONA_PARQUE"
-]);
 const VALID_PAYLOAD_FORMATS = new Set(["JSON", "XML", "CSV"]);
 
 const DEFAULT_CONFIG = {
@@ -104,12 +101,12 @@ function normalizeConfig() {
   config.rabbitPort = toInt(config.rabbitPort, DEFAULT_CONFIG.rabbitPort);
   config.payloadFormat = String(config.payloadFormat).trim().toUpperCase();
 
-  if (!VALID_ZONES.has(config.zone)) {
+  if (!isValidZone(config.zone)) {
     console.warn(`[CONFIG] Zona invalida '${config.zone}'. A usar ${DEFAULT_CONFIG.zone}.`);
     config.zone = DEFAULT_CONFIG.zone;
   }
 
-  if (!VALID_TYPES.has(config.type)) {
+  if (!isValidSensorType(config.type)) {
     console.warn(`[CONFIG] Tipo invalido '${config.type}'. A usar ${DEFAULT_CONFIG.type}.`);
     config.type = DEFAULT_CONFIG.type;
   }
@@ -151,22 +148,7 @@ function generateValue(type) {
 }
 
 function getUnit(type) {
-  switch (type) {
-    case "TEMP":
-      return "C";
-    case "HUM":
-      return "%";
-    case "AR":
-    case "PM2.5":
-    case "PM10":
-      return "ug/m3";
-    case "RUIDO":
-      return "dB";
-    case "LUZ":
-      return "lux";
-    default:
-      return "";
-  }
+  return UNITS_BY_TYPE[type] || "";
 }
 
 function escapeXml(value) {
