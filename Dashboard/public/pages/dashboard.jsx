@@ -8,7 +8,7 @@ function KPI({ label, value, hint, accent, icon: IconComp }) {
     moss: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300',
     amber: 'bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300',
     ink: 'bg-ink-100 text-ink-700 dark:bg-ink-800 dark:text-ink-200',
-    rose: 'bg-rose-50 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300',
+    rose: 'bg-rose-50 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300'
   };
   return (
     <Card padding="p-4">
@@ -22,80 +22,80 @@ function KPI({ label, value, hint, accent, icon: IconComp }) {
           {hint && <div className="text-[11px] text-ink-500 dark:text-ink-400 mt-0.5">{hint}</div>}
         </div>
       </div>
-    </Card>
-  );
+    </Card>);
+
 }
 
+const CITY_MAP_SRC = 'assets/city-map.png';
+
 function ZoneCityMap({ zoneWorst }) {
-  // Disposição esquemática dos 5 blocos.
-  // Sem mapa geográfico — apenas layout estilizado em grid.
+  // Foto aérea real como fundo. Cada zona é uma "janela" nítida recortada
+  // sobre o mapa esbatido, alinhada à mesma região da imagem original.
   const layout = [
-    { zone: 'ZONA_PARQUE',      x: 5,  y: 8,  w: 38, h: 36 },
-    { zone: 'ZONA_RESIDENCIAL', x: 5,  y: 50, w: 38, h: 42 },
-    { zone: 'ZONA_CENTRO',      x: 46, y: 30, w: 28, h: 36 },
-    { zone: 'ZONA_ESCOLAR',     x: 46, y: 8,  w: 28, h: 18 },
-    { zone: 'ZONA_INDUSTRIAL',  x: 77, y: 8,  w: 18, h: 84 },
-  ];
-  const fillFor = (level) => {
-    if (level === 'CRITICAL') return { fill: 'rgba(244, 63, 94, 0.18)', stroke: 'rgb(244, 63, 94)' };
-    if (level === 'WARNING')  return { fill: 'rgba(245, 158, 11, 0.18)', stroke: 'rgb(245, 158, 11)' };
-    return { fill: 'rgba(16, 185, 129, 0.15)', stroke: 'rgb(16, 185, 129)' };
+  { zone: 'ZONA_PARQUE', x: 5, y: 4, w: 37, h: 42 },
+  { zone: 'ZONA_RESIDENCIAL', x: 5, y: 49, w: 37, h: 47 },
+  { zone: 'ZONA_ESCOLAR', x: 43, y: 4, w: 23, h: 18 },
+  { zone: 'ZONA_CENTRO', x: 43, y: 24, w: 23, h: 37 },
+  { zone: 'ZONA_INDUSTRIAL', x: 68, y: 4, w: 29, h: 92 }];
+
+  const colorFor = (lvl) => lvl === 'CRITICAL' ? '#f43f5e' : lvl === 'WARNING' ? '#f59e0b' : '#10b981';
+
+  // Recorte alinhado: a imagem é dimensionada ao tamanho do contentor e
+  // reposicionada por percentagens — tudo responsivo, sem JS.
+  const posFor = (b) => ({ left: `${b.x}%`, top: `${b.y}%`, width: `${b.w}%`, height: `${b.h}%` });
+  const bgFor = (b) => {
+    const zw = b.w / 100,zh = b.h / 100,zx = b.x / 100,zy = b.y / 100;
+    return {
+      backgroundImage: `url(${CITY_MAP_SRC})`,
+      backgroundSize: `${100 / zw}% ${100 / zh}%`,
+      backgroundPosition: `${(100 * zx / (1 - zw)).toFixed(3)}% ${(100 * zy / (1 - zh)).toFixed(3)}%`,
+      backgroundRepeat: 'no-repeat'
+    };
   };
-  const dotFor = (level) => level === 'CRITICAL' ? '#f43f5e' : level === 'WARNING' ? '#f59e0b' : '#10b981';
+  const ZoneLabel = ({ zone, color, className = 'absolute top-2 left-2' }) =>
+  <div className={className}>
+      <div className="inline-flex items-center gap-1.5 rounded-lg bg-white/95 dark:bg-ink-900/90 backdrop-blur px-2.5 py-1 shadow-sm ring-1 ring-black/5 dark:ring-white/10">
+        <span className="w-2 h-2 rounded-full" style={{ background: color }} />
+        <span className="text-[11px] font-bold tracking-wide text-ink-800 dark:text-ink-100 uppercase">
+          {window.api.ZONA_LABEL[zone]}
+        </span>
+      </div>
+    </div>;
+
+
   return (
-    <div className="relative w-full aspect-[5/3] rounded-lg bg-ink-50 dark:bg-ink-950/40 ring-1 ring-ink-200/60 dark:ring-ink-800 overflow-hidden">
-      {/* Rede subtil */}
-      <svg viewBox="0 0 100 60" preserveAspectRatio="none" className="absolute inset-0 w-full h-full">
-        <defs>
-          <pattern id="grid" width="5" height="5" patternUnits="userSpaceOnUse">
-            <path d="M5 0H0V5" fill="none" stroke="currentColor" strokeWidth="0.12" className="text-ink-300 dark:text-ink-700" />
-          </pattern>
-        </defs>
-        <rect width="100" height="60" fill="url(#grid)" />
-        {/* Rio/avenida */}
-        <path d="M0 30 Q 30 20, 50 32 T 100 28" stroke="currentColor" strokeWidth="0.5" fill="none" className="text-petrol-300 dark:text-petrol-700" strokeDasharray="1 1.4" />
-      </svg>
-      <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="absolute inset-0 w-full h-full">
-        {layout.map((b) => {
-          const lvl = zoneWorst[b.zone] || 'NORMAL';
-          const { fill, stroke } = fillFor(lvl);
-          return (
-            <g key={b.zone}>
-              <rect x={b.x} y={b.y} width={b.w} height={b.h} rx="1.5" fill={fill} stroke={stroke} strokeWidth="0.3" />
-            </g>
-          );
-        })}
-      </svg>
-      {/* Labels (HTML over SVG) */}
+    <div className="relative w-full aspect-[1629/965] rounded-lg ring-1 ring-ink-200/60 dark:ring-ink-800 overflow-hidden">
+      {/* Base esbatida (foto desaturada) */}
+      <div
+        className="absolute inset-0"
+        style={{ backgroundImage: `url(${CITY_MAP_SRC})`, backgroundSize: 'cover', backgroundPosition: 'center', filter: 'grayscale(0.92) brightness(1.08) contrast(0.95)' }} />
+
+      <div className="absolute inset-0 bg-white/60 dark:bg-ink-950/72" />
+
+      {/* Zonas recortadas */}
       {layout.map((b) => {
         const lvl = zoneWorst[b.zone] || 'NORMAL';
+        const color = colorFor(lvl);
         return (
           <div
             key={b.zone}
-            className="absolute"
-            style={{ left: `${b.x + 1.5}%`, top: `${b.y + 1.5}%`, width: `${b.w - 3}%`, height: `${b.h - 3}%` }}
-          >
-            <div className="h-full p-2 flex flex-col">
-              <div className="flex items-center gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full" style={{ background: dotFor(lvl) }} />
-                <span className="text-[10px] font-semibold tracking-wide text-ink-800 dark:text-ink-100 uppercase">
-                  {window.api.ZONA_LABEL[b.zone]}
-                </span>
-              </div>
-              {b.h > 25 && (
-                <div className="mt-auto text-[9px] font-mono text-ink-500 dark:text-ink-400 uppercase">{lvl}</div>
-              )}
-            </div>
-          </div>
-        );
+            className="absolute rounded-2xl overflow-hidden shadow-[0_4px_20px_-4px_rgba(0,0,0,0.35)] transition-transform hover:scale-[1.012]"
+            style={{ ...posFor(b), ...bgFor(b), border: `2.5px solid ${color}`, borderRadius: "12px" }}
+            title={`${window.api.ZONA_LABEL[b.zone]} — ${lvl}`}>
+
+            <ZoneLabel zone={b.zone} color={color} />
+          </div>);
+
       })}
-      <div className="absolute bottom-2 right-2 flex items-center gap-2 text-[10px] bg-white/85 dark:bg-ink-900/85 backdrop-blur px-2 py-1 rounded-md">
-        <span className="inline-flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />Normal</span>
-        <span className="inline-flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-amber-500" />Aviso</span>
-        <span className="inline-flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-rose-500" />Crítico</span>
+
+      {/* Legenda */}
+      <div className="absolute bottom-2.5 right-2.5 flex items-center gap-3 text-[11px] font-medium bg-white/92 dark:bg-ink-900/90 backdrop-blur px-3 py-1.5 rounded-lg shadow-sm ring-1 ring-black/5 dark:ring-white/10" style={{ color: "rgb(255, 255, 255)", opacity: "1" }}>
+        <span className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-emerald-500" />Normal</span>
+        <span className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-amber-500" />Aviso</span>
+        <span className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-rose-500" />Crítico</span>
       </div>
-    </div>
-  );
+    </div>);
+
 }
 
 function ZoneSummaryCard({ zone, lastByType }) {
@@ -103,9 +103,9 @@ function ZoneSummaryCard({ zone, lastByType }) {
   const worst = types.reduce((acc, t) => window.api.worstAlert(acc, window.api.classifyAlert(t, lastByType[t].value)), 'NORMAL');
   const accent = worst === 'CRITICAL' ? 'rose' : worst === 'WARNING' ? 'amber' : 'emerald';
   const borderClass = {
-    rose:    'before:bg-rose-500',
-    amber:   'before:bg-amber-500',
-    emerald: 'before:bg-emerald-500',
+    rose: 'before:bg-rose-500',
+    amber: 'before:bg-amber-500',
+    emerald: 'before:bg-emerald-500'
   }[accent];
   return (
     <div className={`relative rounded-xl bg-white dark:bg-ink-900 border border-ink-200/70 dark:border-ink-800 p-4 pl-5 overflow-hidden before:content-[''] before:absolute before:inset-y-0 before:left-0 before:w-1 ${borderClass}`}>
@@ -127,12 +127,12 @@ function ZoneSummaryCard({ zone, lastByType }) {
               <div className="text-right">
                 <div className={`num text-sm font-semibold ${valColor}`}>{fmtNumber(r.value, t)}<span className="ml-0.5 text-[10px] font-normal text-ink-500 dark:text-ink-400">{r.unit}</span></div>
               </div>
-            </div>
-          );
+            </div>);
+
         })}
       </div>
-    </div>
-  );
+    </div>);
+
 }
 
 function AlertRow({ r }) {
@@ -156,8 +156,8 @@ function AlertRow({ r }) {
         </div>
         <AlertBadge level={lvl} size="sm" />
       </div>
-    </div>
-  );
+    </div>);
+
 }
 
 function ArchitectureNote() {
@@ -165,12 +165,12 @@ function ArchitectureNote() {
     <Card padding="p-5">
       <SectionTitle sub="Pub/Sub → Gateways → Servidor → BD · Análise via gRPC">Sobre o sistema</SectionTitle>
       <div className="flex items-center gap-2 text-[11px] font-mono uppercase tracking-wide overflow-x-auto scroll-thin pb-1">
-        {['Sensores','RabbitMQ','Gateways','Pré-processamento','Servidor','MongoDB'].map((step, i, arr) => (
-          <React.Fragment key={step}>
+        {['Sensores', 'RabbitMQ', 'Gateways', 'Pré-processamento', 'Servidor', 'MongoDB'].map((step, i, arr) =>
+        <React.Fragment key={step}>
             <span className="shrink-0 px-2 py-1 rounded bg-ink-100 dark:bg-ink-800 text-ink-700 dark:text-ink-200">{step}</span>
             {i < arr.length - 1 && <Icon.ArrowRight width={12} height={12} className="shrink-0 text-ink-400" />}
           </React.Fragment>
-        ))}
+        )}
       </div>
       <div className="mt-2 flex items-center gap-2 text-[11px] font-mono uppercase tracking-wide">
         <span className="px-2 py-1 rounded bg-ink-100 dark:bg-ink-800 text-ink-700 dark:text-ink-200">Servidor</span>
@@ -181,24 +181,18 @@ function ArchitectureNote() {
         Esta interface lê do Servidor/BD e da Análise. O paradigma <span className="font-semibold text-ink-700 dark:text-ink-200">One Health</span> liga saúde
         humana, animal e ambiental — os indicadores ambientais permitem antecipar riscos para a saúde pública urbana.
       </p>
-    </Card>
-  );
+    </Card>);
+
 }
 
 function DashboardPage({ nav }) {
   const [data, setData] = useState(null);
   useEffect(() => {
-    const load = () => {
-      window.api.invalidateCache();
-      Promise.all([
-        window.api.getReadings(),
-        window.api.getSensors(),
-        window.api.getAnalyses(),
-      ]).then(([readings, sensors, analyses]) => setData({ readings, sensors, analyses }));
-    };
-    load();
-    const id = setInterval(load, 30000);
-    return () => clearInterval(id);
+    Promise.all([
+    window.api.getReadings(),
+    window.api.getSensors(),
+    window.api.getAnalyses()]
+    ).then(([readings, sensors, analyses]) => setData({ readings, sensors, analyses }));
   }, []);
 
   if (!data) return <Loading />;
@@ -214,7 +208,7 @@ function DashboardPage({ nav }) {
   });
   // Pior nível por zona com base na última leitura de cada tipo
   const zoneWorst = {};
-  window.api.ZONAS.forEach((z) => { zoneWorst[z] = 'NORMAL'; });
+  window.api.ZONAS.forEach((z) => {zoneWorst[z] = 'NORMAL';});
   Object.values(lastByZoneType).forEach((r) => {
     const lvl = window.api.classifyAlert(r.type, r.value);
     zoneWorst[r.zone] = window.api.worstAlert(zoneWorst[r.zone], lvl);
@@ -223,27 +217,27 @@ function DashboardPage({ nav }) {
   // Cartões por zona — agrupados
   const zoneCards = window.api.ZONAS.map((z) => {
     const byType = {};
-    Object.values(lastByZoneType).forEach((r) => { if (r.zone === z) byType[r.type] = r; });
+    Object.values(lastByZoneType).forEach((r) => {if (r.zone === z) byType[r.type] = r;});
     if (Object.keys(byType).length === 0) return null;
     return { zone: z, byType };
   }).filter(Boolean);
 
   // Alertas (todas as leituras com level WARNING/CRITICAL, recentes)
-  const alerts = readings
-    .map((r) => ({ ...r, level: window.api.classifyAlert(r.type, r.value) }))
-    .filter((r) => r.level !== 'NORMAL')
-    .slice(0, 8);
+  const alerts = readings.
+  map((r) => ({ ...r, level: window.api.classifyAlert(r.type, r.value) })).
+  filter((r) => r.level !== 'NORMAL').
+  slice(0, 8);
 
   const activeSensorIds = new Set(sensors.filter((s) => s.estado === 'ativo').map((s) => s.sensorId));
   const zonesMonitored = new Set(sensors.map((s) => s.zone)).size;
   const activeAlerts = readings.filter((r) => window.api.classifyAlert(r.type, r.value) !== 'NORMAL').length;
 
   return (
-    <div className="px-4 lg:px-8 py-6 space-y-6">
+    <div className="px-4 lg:px-8 py-6 space-y-6" style={{ width: "1006px" }}>
       {/* KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
-        <KPI label="Leituras"        value={readings.length.toLocaleString('pt-PT')} hint="últimos 3 dias" accent="petrol" icon={Icon.Pulse} />
-        <KPI label="Sensores ativos" value={`${activeSensorIds.size}/${new Set(sensors.map(s => s.sensorId)).size}`} hint="estado: ativo" accent="moss" icon={Icon.Sensors} />
+        <KPI label="Leituras" value={readings.length.toLocaleString('pt-PT')} hint="últimos 3 dias" accent="petrol" icon={Icon.Pulse} />
+        <KPI label="Sensores ativos" value={`${activeSensorIds.size}/${new Set(sensors.map((s) => s.sensorId)).size}`} hint="estado: ativo" accent="moss" icon={Icon.Sensors} />
         <KPI label="Zonas monitorizadas" value={zonesMonitored} hint="cobertura urbana" accent="ink" icon={Icon.Dashboard} />
         <KPI label="Análises" value={analyses.length} hint="histórico estatístico" accent="ink" icon={Icon.Analyses} />
         <KPI label="Alertas ativos" value={activeAlerts} hint="WARNING + CRITICAL" accent={activeAlerts > 0 ? 'rose' : 'moss'} icon={Icon.Bell} />
@@ -253,18 +247,18 @@ function DashboardPage({ nav }) {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <Card className="lg:col-span-2">
           <SectionTitle sub="Pior nível de alerta atual por zona" action={
-            <span className="text-[11px] text-ink-400 font-mono">{Object.values(zoneWorst).filter(v => v !== 'NORMAL').length} de 5 zonas com avisos</span>
+          <span className="text-[11px] text-ink-400 font-mono">{Object.values(zoneWorst).filter((v) => v !== 'NORMAL').length} de 5 zonas com avisos</span>
           }>Mapa da cidade</SectionTitle>
           <ZoneCityMap zoneWorst={zoneWorst} />
         </Card>
         <Card>
           <SectionTitle sub={`${alerts.length} eventos recentes`} action={
-            <a href="#/leituras" className="text-[11px] text-petrol-600 dark:text-petrol-300 hover:underline">Ver todos →</a>
+          <a href="#/leituras" className="text-[11px] text-petrol-600 dark:text-petrol-300 hover:underline">Ver todos →</a>
           }>Alertas recentes</SectionTitle>
           <div className="max-h-[360px] overflow-y-auto scroll-thin -mx-1 px-1">
-            {alerts.length === 0
-              ? <Empty title="Sem alertas" hint="Todas as zonas em estado normal." />
-              : alerts.map((r, i) => <AlertRow key={i} r={r} />)}
+            {alerts.length === 0 ?
+            <Empty title="Sem alertas" hint="Todas as zonas em estado normal." /> :
+            alerts.map((r, i) => <AlertRow key={i} r={r} />)}
           </div>
         </Card>
       </div>
@@ -273,9 +267,9 @@ function DashboardPage({ nav }) {
       <div>
         <SectionTitle sub="Última leitura por tipo, com nível de alerta correspondente">Estado por zona</SectionTitle>
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {zoneCards.map(({ zone, byType }) => (
-            <ZoneSummaryCard key={zone} zone={zone} lastByType={byType} />
-          ))}
+          {zoneCards.map(({ zone, byType }) =>
+          <ZoneSummaryCard key={zone} zone={zone} lastByType={byType} />
+          )}
         </div>
       </div>
 
@@ -288,8 +282,8 @@ function DashboardPage({ nav }) {
         </div>
         <ArchitectureNote />
       </div>
-    </div>
-  );
+    </div>);
+
 }
 
 function ZoneActivityChart({ readings }) {
@@ -315,18 +309,18 @@ function ZoneActivityChart({ readings }) {
               background: dark ? '#1f262c' : '#fff',
               border: `1px solid ${dark ? '#2f3a43' : '#d6dde2'}`,
               borderRadius: 8,
-              fontSize: 12,
+              fontSize: 12
             }}
-            cursor={{ fill: dark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)' }}
-          />
+            cursor={{ fill: dark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)' }} />
+
           <Legend wrapperStyle={{ fontSize: 11 }} iconType="circle" />
-          <Bar dataKey="Normal"   stackId="a" fill="#10b981" radius={[0,0,0,0]} />
-          <Bar dataKey="Aviso"    stackId="a" fill="#f59e0b" radius={[0,0,0,0]} />
-          <Bar dataKey="Crítico"  stackId="a" fill="#f43f5e" radius={[4,4,0,0]} />
+          <Bar dataKey="Normal" stackId="a" fill="#10b981" radius={[0, 0, 0, 0]} />
+          <Bar dataKey="Aviso" stackId="a" fill="#f59e0b" radius={[0, 0, 0, 0]} />
+          <Bar dataKey="Crítico" stackId="a" fill="#f43f5e" radius={[4, 4, 0, 0]} />
         </BarChart>
       </ResponsiveContainer>
-    </div>
-  );
+    </div>);
+
 }
 
 window.DashboardPage = DashboardPage;
