@@ -30,30 +30,65 @@ internal class CliHandler
 
     public void Run()
     {
+        if (Console.IsInputRedirected)
+        {
+            Console.WriteLine("[Servidor] Input redirecionado. Modo interativo CLI desativado.");
+            while (servidor.IsRunning)
+            {
+                string? input = Console.ReadLine();
+                if (input == null)
+                {
+                    Thread.Sleep(1000);
+                    continue;
+                }
+                string trimmed = input.Trim();
+                if (string.IsNullOrEmpty(trimmed)) continue;
+                try
+                {
+                    ProcessCommand(trimmed);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[Servidor] Falha ao executar comando: {ex.Message}");
+                }
+            }
+            return;
+        }
+
         while (servidor.IsRunning)
         {
-            string? input = AnsiConsole.Ask<string>("[bold cyan]servidor>[/]");
-            if (input == null)
-            {
-                continue;
-            }
-
-            string trimmed = input.Trim();
-            if (string.IsNullOrEmpty(trimmed))
-            {
-                continue;
-            }
-
             try
             {
+                string? input = AnsiConsole.Ask<string>("[bold cyan]servidor>[/]");
+                if (input == null)
+                {
+                    continue;
+                }
+
+                string trimmed = input.Trim();
+                if (string.IsNullOrEmpty(trimmed))
+                {
+                    continue;
+                }
+
                 ProcessCommand(trimmed);
             }
             catch (Exception ex)
             {
+                if (ex.Message.Contains("non-interactive") || ex.GetType().Name == "InvalidOperationException")
+                {
+                    Console.WriteLine("[Servidor] Modo CLI interativo não disponível neste terminal. O servidor continuará em execução.");
+                    while (servidor.IsRunning)
+                    {
+                        Thread.Sleep(2000);
+                    }
+                    break;
+                }
                 ShowError($"Falha ao executar comando: {ex.Message}");
             }
         }
     }
+
 
     private void ProcessCommand(string input)
     {
