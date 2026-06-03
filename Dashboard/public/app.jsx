@@ -9,10 +9,16 @@ function App() {
   const [alertCount, setAlertCount] = useState(0);
 
   useEffect(() => {
-    window.api.getReadings().then((rs) => {
-      const n = rs.filter((r) => window.api.classifyAlert(r.type, r.value) !== 'NORMAL').length;
-      setAlertCount(n);
-    });
+    const load = () => {
+      window.api.invalidateCache();
+      window.api.getReadings().then((rs) => {
+        const n = rs.filter((r) => window.api.classifyAlert(r.type, r.value) !== 'NORMAL').length;
+        setAlertCount(n);
+      });
+    };
+    load();
+    const id = setInterval(load, 30000);
+    return () => clearInterval(id);
   }, []);
 
   const titles = {

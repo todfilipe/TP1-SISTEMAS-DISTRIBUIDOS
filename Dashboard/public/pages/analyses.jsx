@@ -219,9 +219,19 @@ function AnalysesPage({ nav, route }) {
 
   const [analyses, setAnalyses] = useState(null);
   const [filter, setFilter] = useState({ zone: null, type: null, alert: null });
-  useEffect(() => { window.api.getAnalyses().then(setAnalyses); }, []);
+  useEffect(() => {
+    const load = () => window.api.getAnalyses().then(setAnalyses);
+    load();
+    const id = setInterval(load, 30000);
+    return () => clearInterval(id);
+  }, []);
   if (!analyses) return <Loading />;
-  const filtered = analyses.filter((a) => {
+
+  const sessionAnalyses = window.api.getSessionAnalyses();
+  const dbIds = new Set(analyses.map((a) => a.id));
+  const merged = [...sessionAnalyses.filter((a) => !dbIds.has(a.id)), ...analyses];
+
+  const filtered = merged.filter((a) => {
     if (filter.zone && a.zone !== filter.zone) return false;
     if (filter.type && a.type !== filter.type) return false;
     if (filter.alert && a.alertLevel !== filter.alert) return false;
@@ -277,7 +287,10 @@ function AnalysesPage({ nav, route }) {
                 {filtered.map((a) => (
                   <tr key={a.id} className="hover:bg-ink-50/60 dark:hover:bg-ink-800/30 cursor-pointer"
                       onClick={() => nav(`/analises/${a.id}`)}>
-                    <td className="px-4 py-2 font-mono text-[12.5px] font-medium">{a.id}</td>
+                    <td className="px-4 py-2 font-mono text-[12.5px] font-medium">
+                      {a.id}
+                      {a._session && <span className="ml-1.5 text-[9px] px-1 py-0.5 rounded bg-petrol-50 dark:bg-petrol-500/10 text-petrol-600 dark:text-petrol-300 ring-1 ring-petrol-200 dark:ring-petrol-500/30 font-sans font-semibold align-middle">sessão</span>}
+                    </td>
                     <td className="px-4 py-2"><ZoneTag zone={a.zone} size="sm" /></td>
                     <td className="px-4 py-2"><TypePill type={a.type} /></td>
                     <td className="px-4 py-2 font-mono text-[12px] text-ink-600 dark:text-ink-300">{a.sensorId || '—'}</td>

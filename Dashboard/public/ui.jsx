@@ -351,16 +351,74 @@ function Field({ label, children, hint, className = '' }) {
   );
 }
 const inputClass = 'w-full bg-white dark:bg-ink-900 border border-ink-200 dark:border-ink-700 rounded-md px-3 py-2 text-sm text-ink-800 dark:text-ink-100 placeholder-ink-400 focus:outline-none focus:ring-2 focus:ring-petrol-500/40 focus:border-petrol-500';
-function Select({ value, onChange, options, placeholder = 'Todos', className = '' }) {
+function Select({ value, onChange, options, placeholder = 'Todos', className = '', required = false }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const close = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, []);
+
+  const normalized = options.map((o) => (typeof o === 'string' ? { value: o, label: o } : o));
+  const selected = normalized.find((o) => o.value === value);
+
+  const pick = (v) => { onChange(v || null); setOpen(false); };
+
+  const chevron = (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+      className={`flex-shrink-0 text-ink-400 transition-transform duration-150 ${open ? 'rotate-180' : ''}`}>
+      <path d="M6 9l6 6 6-6" />
+    </svg>
+  );
+
   return (
-    <select className={`${inputClass} ${className}`} value={value || ''} onChange={(e) => onChange(e.target.value || null)}>
-      <option value="">{placeholder}</option>
-      {options.map((o) => (
-        <option key={typeof o === 'string' ? o : o.value} value={typeof o === 'string' ? o : o.value}>
-          {typeof o === 'string' ? o : o.label}
-        </option>
-      ))}
-    </select>
+    <div ref={ref} className={`relative ${className}`}>
+      <button
+        type="button"
+        className={`${inputClass} w-full flex items-center justify-between gap-2 cursor-pointer text-left`}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span className={`truncate ${selected ? '' : 'text-ink-400 dark:text-ink-500'}`}>
+          {selected ? selected.label : placeholder}
+        </span>
+        {chevron}
+      </button>
+
+      {open && (
+        <div className="absolute z-50 mt-1 w-full min-w-max bg-white dark:bg-ink-900 border border-ink-200 dark:border-ink-700 rounded-md shadow-lg overflow-hidden">
+          <div className="py-1 max-h-60 overflow-y-auto">
+            {!required && (
+              <button
+                type="button"
+                onClick={() => pick('')}
+                className={`w-full text-left px-3 py-2 text-sm transition-colors ${
+                  !value ? 'bg-petrol-50 dark:bg-petrol-900/40 text-petrol-800 dark:text-petrol-100 font-medium'
+                         : 'text-ink-400 dark:text-ink-500 hover:bg-ink-50 dark:hover:bg-ink-800/60'
+                }`}
+              >
+                {placeholder}
+              </button>
+            )}
+            {normalized.map((o) => (
+              <button
+                key={o.value}
+                type="button"
+                onClick={() => pick(o.value)}
+                className={`w-full text-left px-3 py-2 text-sm transition-colors ${
+                  o.value === value
+                    ? 'bg-petrol-50 dark:bg-petrol-900/40 text-petrol-800 dark:text-petrol-100 font-medium'
+                    : 'text-ink-700 dark:text-ink-200 hover:bg-ink-50 dark:hover:bg-ink-800/60'
+                }`}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 function Input(props) { return <input className={inputClass} {...props} />; }

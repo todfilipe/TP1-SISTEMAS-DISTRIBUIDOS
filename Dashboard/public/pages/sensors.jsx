@@ -38,7 +38,15 @@ function SensorsPage() {
   const [sensors, setSensors] = useState(null);
   const [query, setQuery] = useState('');
   const [estadoFilter, setEstadoFilter] = useState(null);
-  useEffect(() => { window.api.getSensors().then(setSensors); }, []);
+  useEffect(() => {
+    const load = () => {
+      window.api.invalidateCache();
+      window.api.getSensors().then(setSensors);
+    };
+    load();
+    const id = setInterval(load, 30000);
+    return () => clearInterval(id);
+  }, []);
   if (!sensors) return <Loading />;
   const estadoOptions = window.api.ESTADOS.map((estado) => ({ value: estado, label: estado }));
 

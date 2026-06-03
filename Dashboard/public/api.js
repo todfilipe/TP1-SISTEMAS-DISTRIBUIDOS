@@ -185,10 +185,18 @@
     });
   }
 
-  // -------- Cache leve das leituras (várias páginas pedem o conjunto) ---
+  // -------- Cache leve das leituras + persistência de sessão -----------
   let _allReadingsCache = null;
+  const _sessionAnalyses = [];
+  const _sessionPredictions = [];
+
   async function allReadings() {
-    if (!_allReadingsCache) _allReadingsCache = http('/api/readings');
+    if (!_allReadingsCache) {
+      _allReadingsCache = http('/api/readings').catch((err) => {
+        _allReadingsCache = null;
+        throw err;
+      });
+    }
     return _allReadingsCache;
   }
   function filterReadings(list, f = {}) {
@@ -223,6 +231,8 @@
     },
 
     async getAnalysisById(id) {
+      const sessionMatch = _sessionAnalyses.find((a) => a.id === id);
+      if (sessionMatch) return sessionMatch;
       try {
         return await http(`/api/analyses/${encodeURIComponent(id)}`);
       } catch (_) {
@@ -264,12 +274,15 @@
       const readings = await api.getReadings({ type, zone, sensorId, from, to });
       if (readings.length === 0) return null;
       const a = computeAnalysis({ type, zone, sensorId }, readings);
-      return {
+      const result = {
         id: `A${Date.now().toString().slice(-4)}`,
         ...a,
         createdAt: new Date().toISOString(),
         _readings: readings.slice().sort((x, y) => new Date(x.timestamp) - new Date(y.timestamp)),
+        _session: true,
       };
+      _sessionAnalyses.unshift(result);
+      return result;
     },
 
     async runPrediction({ type, zone, sensorId, from, to, strategy = 'linear', periods = 6 }) {
@@ -278,7 +291,7 @@
       const chronological = readings.slice().sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
       const values = chronological.map((r) => r.value);
       const fc = strategy === 'ewma' ? forecastEWMA(values, periods) : forecastLinear(values, periods);
-      return {
+      const result = {
         id: `P${Date.now().toString().slice(-4)}`,
         type, zone, strategyUsed: strategy, forecast: fc,
         predictionSummary: strategy === 'linear'
@@ -287,7 +300,13 @@
         timestamp: new Date().toISOString(),
         _history: chronological,
       };
+      _sessionPredictions.unshift(result);
+      return result;
     },
+
+    invalidateCache() { _allReadingsCache = null; },
+    getSessionAnalyses() { return _sessionAnalyses.slice(); },
+    getSessionPredictions() { return _sessionPredictions.slice(); },
   };
 
   window.api = api;

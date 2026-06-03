@@ -95,7 +95,15 @@ function ReadingsPage({ nav }) {
   const [page, setPage] = useState(1);
   const pageSize = 25;
 
-  useEffect(() => { window.api.getReadings().then(setAllReadings); }, []);
+  useEffect(() => {
+    const load = () => {
+      window.api.invalidateCache();
+      window.api.getReadings().then(setAllReadings);
+    };
+    load();
+    const id = setInterval(load, 30000);
+    return () => clearInterval(id);
+  }, []);
 
   const filtered = useMemo(() => {
     if (!allReadings) return [];

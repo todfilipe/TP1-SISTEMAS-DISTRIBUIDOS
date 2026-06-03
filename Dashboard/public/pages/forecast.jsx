@@ -70,7 +70,17 @@ function ForecastPage({ nav }) {
     periods: 6,
   });
   const [allReadings, setAllReadings] = useState(null);
-  const [result, setResult] = useState(null); // { kind: 'analysis'|'prediction', data }
+  const [result, setResult] = useState(() => {
+    const sa = window.api.getSessionAnalyses();
+    const sp = window.api.getSessionPredictions();
+    if (!sa.length && !sp.length) return null;
+    const candidates = [
+      ...sa.map((a) => ({ kind: 'analysis', data: a, t: new Date(a.createdAt).getTime() })),
+      ...sp.map((p) => ({ kind: 'prediction', data: p, t: new Date(p.timestamp).getTime() })),
+    ].sort((a, b) => b.t - a.t);
+    const best = candidates[0];
+    return best ? { kind: best.kind, data: best.data } : null;
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
@@ -133,7 +143,12 @@ function ForecastPage({ nav }) {
             <Select value={form.sensorId} onChange={(v) => setForm((f) => ({ ...f, sensorId: v }))} options={sensorIds} placeholder="Todos os da zona" />
           </Field>
           <Field label="Estratégia de previsão">
-            <Select value={form.strategy} onChange={(v) => setForm((f) => ({ ...f, strategy: v || 'linear' }))} options={[{value:'linear',label:'Regressão linear'},{value:'ewma',label:'Média móvel exponencial (EWMA)'}]} placeholder="linear" />
+            <Select
+              required
+              value={form.strategy}
+              onChange={(v) => setForm((f) => ({ ...f, strategy: v || 'linear' }))}
+              options={[{ value: 'linear', label: 'Regressão linear' }, { value: 'ewma', label: 'Média móvel exponencial (EWMA)' }]}
+            />
           </Field>
           <Field label="De">
             <Input type="datetime-local" value={form.from} onChange={(e) => setForm((f) => ({ ...f, from: e.target.value }))} />
@@ -247,17 +262,23 @@ function PredictionResultInline({ p }) {
 }
 
 function PredictionHistory() {
-  const [preds, setPreds] = useState(null);
-  useEffect(() => { window.api.getPredictions().then(setPreds); }, []);
-  if (!preds) return null;
+  const sessionPreds = window.api.getSessionPredictions();
+  const [computed, setComputed] = useState(null);
+  useEffect(() => { window.api.getPredictions().then(setComputed); }, []);
+
+  const allPreds = [...sessionPreds, ...(computed || [])];
+  if (!computed && sessionPreds.length === 0) return null;
+  if (allPreds.length === 0) return null;
+
   return (
     <Card>
-      <SectionTitle sub="Previsões guardadas pela Análise (gRPC)">Histórico de previsões</SectionTitle>
+      <SectionTitle sub="Previsões calculadas nesta sessão e previsões automáticas">Histórico de previsões</SectionTitle>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-        {preds.map((p) => (
+        {allPreds.map((p) => (
           <div key={p.id} className="rounded-lg ring-1 ring-ink-200 dark:ring-ink-800 p-3">
             <div className="flex items-center gap-1.5 flex-wrap">
               <span className="font-mono text-[11px] text-ink-500">{p.id}</span>
+              {p._session && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-petrol-50 dark:bg-petrol-500/10 text-petrol-700 dark:text-petrol-300 ring-1 ring-petrol-200 dark:ring-petrol-500/30 font-semibold">sessão</span>}
               <TypePill type={p.type} />
               <ZoneTag zone={p.zone} size="sm" />
               <span className="ml-auto text-[10px] uppercase font-semibold text-petrol-700 dark:text-petrol-300 font-mono">{p.strategyUsed}</span>

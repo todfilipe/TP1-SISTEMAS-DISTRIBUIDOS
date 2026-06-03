@@ -188,11 +188,17 @@ function ArchitectureNote() {
 function DashboardPage({ nav }) {
   const [data, setData] = useState(null);
   useEffect(() => {
-    Promise.all([
-      window.api.getReadings(),
-      window.api.getSensors(),
-      window.api.getAnalyses(),
-    ]).then(([readings, sensors, analyses]) => setData({ readings, sensors, analyses }));
+    const load = () => {
+      window.api.invalidateCache();
+      Promise.all([
+        window.api.getReadings(),
+        window.api.getSensors(),
+        window.api.getAnalyses(),
+      ]).then(([readings, sensors, analyses]) => setData({ readings, sensors, analyses }));
+    };
+    load();
+    const id = setInterval(load, 30000);
+    return () => clearInterval(id);
   }, []);
 
   if (!data) return <Loading />;
