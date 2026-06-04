@@ -132,6 +132,21 @@ services:
       - sd-net
     restart: unless-stopped
 
+  environment:
+    build: ./services/environment
+    container_name: environment
+    ports:
+      - "8001:8001"
+    networks:
+      - sd-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health', timeout=2)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   sensor-node:
     build:
       context: .
@@ -148,8 +163,11 @@ services:
       RABBIT_PASS: ${SENSOR_NODE_RABBIT_PASS:-admin}
       RABBIT_VHOST: ${SENSOR_NODE_RABBIT_VHOST:-onehealth}
       PAYLOAD_FORMAT: ${SENSOR_NODE_PAYLOAD_FORMAT:-JSON}
+      ENVIRONMENT_SERVICE_URL: ${ENVIRONMENT_SERVICE_URL:-http://environment:8001}
     depends_on:
       rabbitmq:
+        condition: service_healthy
+      environment:
         condition: service_healthy
     networks:
       - sd-net

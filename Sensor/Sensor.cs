@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Globalization;
+using System.Net.Http;
 using System.Net.Sockets;
 using System.Security;
 using System.Text.Json;
@@ -34,6 +35,7 @@ public class SensorClient : IDisposable
     private readonly string _rabbitPass;
     private readonly string _rabbitVHost;
     private readonly string _payloadFormat;
+    private readonly string _environmentServiceUrl;
 
     private bool _connected;
     private bool _typesRegistered;
@@ -52,6 +54,10 @@ public class SensorClient : IDisposable
     // Timeout para ligação e leitura (10s conforme protocolo)
     private const int TimeoutMs = 10000;
     private const int HeartbeatIntervalMs = 5000; // 5s entre heartbeats
+    private static readonly HttpClient EnvironmentHttpClient = new()
+    {
+        Timeout = TimeSpan.FromMilliseconds(1000)
+    };
 
     public string SensorId => _sensorId;
     public bool IsConnected => _connected;
@@ -91,6 +97,9 @@ public class SensorClient : IDisposable
         _rabbitPass = rabbitPass;
         _rabbitVHost = rabbitVHost;
         _payloadFormat = NormalizePayloadFormat(payloadFormat);
+        _environmentServiceUrl = (Environment.GetEnvironmentVariable("ENVIRONMENT_SERVICE_URL") ?? "http://localhost:8001")
+            .Trim()
+            .TrimEnd('/');
 
         _connectionFactory = CreateConnectionFactory();
     }
@@ -560,6 +569,42 @@ public class SensorClient : IDisposable
     }
 
     private double GenerateSimulatedValue(string type)
+    {
+        double? environmentValue = TryGetEnvironmentValue(type);
+        return environmentValue ?? GenerateFallbackValue(type);
+    }
+
+    private double? TryGetEnvironmentValue(string type)
+    {
+        if (string.IsNullOrWhiteSpace(_environmentServiceUrl))
+            return null;
+
+        try
+        {
+            string url = $"{_environmentServiceUrl}/reading?zone={Uri.EscapeDataString(_zone)}&type={Uri.EscapeDataString(type)}&sensorId={Uri.EscapeDataString(_sensorId)}";
+            using HttpResponseMessage response = EnvironmentHttpClient.GetAsync(url).GetAwaiter().GetResult();
+
+            if (!response.IsSuccessStatusCode)
+                return null;
+
+            using Stream stream = response.Content.ReadAsStreamAsync().GetAwaiter().GetResult();
+            using JsonDocument document = JsonDocument.Parse(stream);
+
+            if (document.RootElement.TryGetProperty("value", out JsonElement valueElement)
+                && valueElement.TryGetDouble(out double value))
+            {
+                return Math.Round(value, type.Equals("AR", StringComparison.OrdinalIgnoreCase) ? 2 : 1);
+            }
+        }
+        catch
+        {
+            // Fallback silencioso para manter o sensor operacional se o servico nao estiver disponivel.
+        }
+
+        return null;
+    }
+
+    private double GenerateFallbackValue(string type)
     {
         var rnd = new Random();
         return type.ToUpper() switch

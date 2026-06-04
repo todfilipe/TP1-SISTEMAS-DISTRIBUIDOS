@@ -18,6 +18,7 @@ const DEFAULT_CONFIG = {
   zone: "ZONA_CENTRO",
   type: "TEMP",
   intervalSeconds: 5,
+  environmentServiceUrl: "http://localhost:8001",
   rabbitHost: "localhost",
   rabbitPort: 5672,
   rabbitUser: "admin",
@@ -68,6 +69,10 @@ function normalizeConfig() {
       firstEnv("INTERVAL_SECONDS", "SENSOR_INTERVAL_SECONDS", "SENSOR_NODE_INTERVAL_SECONDS") ??
       fileConfig.intervalSeconds ??
       DEFAULT_CONFIG.intervalSeconds,
+    environmentServiceUrl:
+      firstEnv("ENVIRONMENT_SERVICE_URL", "SENSOR_ENVIRONMENT_SERVICE_URL") ??
+      fileConfig.environmentServiceUrl ??
+      DEFAULT_CONFIG.environmentServiceUrl,
     rabbitHost:
       firstEnv("RABBIT_HOST", "SENSOR_NODE_RABBIT_HOST", "RABBITMQ_HOST") ??
       fileConfig.rabbitHost ??
@@ -98,6 +103,7 @@ function normalizeConfig() {
   config.zone = String(config.zone).trim().toUpperCase();
   config.type = String(config.type).trim().toUpperCase();
   config.intervalSeconds = toInt(config.intervalSeconds, DEFAULT_CONFIG.intervalSeconds);
+  config.environmentServiceUrl = String(config.environmentServiceUrl).trim().replace(/\/+$/, "");
   config.rabbitPort = toInt(config.rabbitPort, DEFAULT_CONFIG.rabbitPort);
   config.payloadFormat = String(config.payloadFormat).trim().toUpperCase();
 
@@ -128,7 +134,7 @@ function randomBetween(min, max, decimals = 1) {
   return Math.round((min + Math.random() * (max - min)) * factor) / factor;
 }
 
-function generateValue(type) {
+function generateFallbackValue(type) {
   switch (type) {
     case "TEMP":
       return randomBetween(15, 40);
@@ -144,6 +150,40 @@ function generateValue(type) {
       return randomBetween(100, 100000);
     default:
       return randomBetween(0, 100);
+  }
+}
+
+async function generateValue(config) {
+  const environmentValue = await fetchEnvironmentValue(config);
+  return environmentValue ?? generateFallbackValue(config.type);
+}
+
+async function fetchEnvironmentValue(config) {
+  if (!config.environmentServiceUrl) {
+    return null;
+  }
+
+  const url = new URL("/reading", config.environmentServiceUrl);
+  url.searchParams.set("zone", config.zone);
+  url.searchParams.set("type", config.type);
+  url.searchParams.set("sensorId", config.sensorId);
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 1000);
+
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) {
+      return null;
+    }
+
+    const payload = await response.json();
+    const value = Number(payload.value);
+    return Number.isFinite(value) ? value : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -282,7 +322,7 @@ class SensorNode {
   }
 
   async publishReading() {
-    const value = generateValue(this.config.type);
+    const value = await generateValue(this.config);
     const unit = getUnit(this.config.type);
     const timestamp = timestampNow();
     const message = {
