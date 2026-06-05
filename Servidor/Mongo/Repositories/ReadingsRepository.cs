@@ -1,3 +1,4 @@
+using MongoDB.Bson;
 using MongoDB.Driver;
 using Servidor.Mongo.Models;
 
@@ -10,6 +11,35 @@ public class ReadingsRepository
     public ReadingsRepository(MongoDbContext context)
     {
         readings = context.Database.GetCollection<ReadingDocument>("readings");
+        EnsureIndexes();
+    }
+
+    private void EnsureIndexes()
+    {
+        try
+        {
+            var messageIdFilter = new BsonDocumentFilterDefinition<ReadingDocument>(
+                new BsonDocument("messageId", new BsonDocument
+                {
+                    { "$exists", true },
+                    { "$type", "string" }
+                }));
+
+            var messageIdIndex = new CreateIndexModel<ReadingDocument>(
+                Builders<ReadingDocument>.IndexKeys.Ascending(reading => reading.MessageId),
+                new CreateIndexOptions<ReadingDocument>
+                {
+                    Name = "ux_readings_messageId",
+                    Unique = true,
+                    PartialFilterExpression = messageIdFilter
+                });
+
+            readings.Indexes.CreateOne(messageIdIndex);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[AVISO][MongoDB] Nao foi possivel garantir indice de idempotencia em readings: {ex.Message}");
+        }
     }
 
     public async Task InsertAsync(ReadingDocument reading, CancellationToken cancellationToken = default)

@@ -101,7 +101,7 @@ namespace Servidor
                 }
 
                 Console.WriteLine($"[Rabbit <- {envelope.GatewayId}] {envelope.Message}");
-                string response = _server.ProcessarMensagemRabbit(envelope.GatewayId, envelope.Message);
+                string response = _server.ProcessarMensagemRabbit(envelope.GatewayId, envelope.Message, envelope.MessageId);
                 Console.WriteLine($"[Rabbit -> {envelope.GatewayId}] {response}");
 
                 if (ShouldAck(response))

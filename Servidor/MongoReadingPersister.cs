@@ -1,5 +1,6 @@
 using Analysis;
 using Google.Protobuf;
+using MongoDB.Driver;
 using Servidor.Mongo.Models;
 using Servidor.Mongo.Repositories;
 using Shared;
@@ -35,7 +36,8 @@ internal sealed class MongoReadingPersister
         string zona,
         string timestamp,
         string gatewayId,
-        string mensagemOriginal)
+        string mensagemOriginal,
+        string? messageId = null)
     {
         if (_readingsRepository == null)
         {
@@ -64,6 +66,7 @@ internal sealed class MongoReadingPersister
                 Unit = SensorTypes.GetUnitForType(tipoDado, string.Empty),
                 Timestamp = timestampUtc,
                 GatewayId = gatewayId,
+                MessageId = string.IsNullOrWhiteSpace(messageId) ? null : messageId,
                 OriginalMessageFormat = mensagemOriginal,
                 CreatedAt = DateTime.UtcNow
             };
@@ -89,7 +92,12 @@ internal sealed class MongoReadingPersister
                 ? "Leitura persistida em readings, mas a atualizacao de sensors_metadata nao foi confirmada."
                 : "Leitura guardada apenas no SQLite local.";
             Console.WriteLine($"[ERRO][MongoDB] Timeout ao persistir leitura apos {_writeTimeout.TotalSeconds:0}s: {ex.Message}. {impacto}");
-            return false;
+            return readingPersisted;
+        }
+        catch (MongoWriteException ex) when (ex.WriteError?.Category == ServerErrorCategory.DuplicateKey)
+        {
+            Console.WriteLine($"[Servidor][MongoDB] Leitura duplicada ignorada em readings: messageId={messageId}.");
+            return true;
         }
         catch (Exception ex)
         {
@@ -97,7 +105,7 @@ internal sealed class MongoReadingPersister
                 ? "Leitura persistida em readings, mas a atualizacao de sensors_metadata falhou."
                 : "Leitura guardada apenas no SQLite local.";
             Console.WriteLine($"[ERRO][MongoDB] Falha ao persistir leitura no MongoDB: {ex.GetType().Name}: {ex.Message}. {impacto}");
-            return false;
+            return readingPersisted;
         }
     }
 

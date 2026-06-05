@@ -17,6 +17,14 @@ database.readings.createIndex(
   { zone: 1, type: 1 },
   { name: "idx_readings_zone_type" }
 );
+database.readings.createIndex(
+  { messageId: 1 },
+  {
+    name: "ux_readings_messageId",
+    unique: true,
+    partialFilterExpression: { messageId: { $exists: true, $type: "string" } }
+  }
+);
 
 database.analyses.createIndex(
   { type: 1, createdAt: -1 },

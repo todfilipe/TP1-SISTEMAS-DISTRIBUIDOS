@@ -31,6 +31,10 @@ public class ReadingDocument
     [BsonElement("gatewayId")]
     public string GatewayId { get; set; } = string.Empty;
 
+    [BsonElement("messageId")]
+    [BsonIgnoreIfNull]
+    public string? MessageId { get; set; }
+
     [BsonElement("originalMessageFormat")]
     public string OriginalMessageFormat { get; set; } = string.Empty;
 

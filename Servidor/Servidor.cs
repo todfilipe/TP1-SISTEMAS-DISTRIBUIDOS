@@ -33,6 +33,7 @@ namespace Servidor
         private readonly GatewayRabbitMqConsumer? _gatewayRabbitMqConsumer;
         private readonly ServidorHttpApi? _httpApi;
         private TcpListener? _listener;
+        private Thread? _fallbackSyncThread;
         private volatile bool _running;
 
         // Conjunto de gateways ligados (HashSet para lookups eficientes)
@@ -86,6 +87,7 @@ namespace Servidor
             _running = true;
             IniciarGatewayRabbitMqConsumer();
             IniciarHttpApi();
+            IniciarSincronizacaoFallback();
 
             _cliHandler.ShowBanner();
 
@@ -216,6 +218,69 @@ namespace Servidor
             catch (Exception ex)
             {
                 Console.WriteLine($"[Servidor][HTTP] Nao foi possivel iniciar API HTTP: {ex.Message}");
+            }
+        }
+
+        private void IniciarSincronizacaoFallback()
+        {
+            _fallbackSyncThread = new Thread(SincronizarFallbackLoop)
+            {
+                IsBackground = true,
+                Name = "FallbackSqliteSync"
+            };
+            _fallbackSyncThread.Start();
+            Console.WriteLine("[Servidor][Fallback] Sincronizacao SQLite -> MongoDB iniciada.");
+        }
+
+        private void SincronizarFallbackLoop()
+        {
+            while (_running)
+            {
+                try
+                {
+                    SincronizarLeiturasPendentes();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[Servidor][Fallback] Erro inesperado na sincronizacao: {ex.Message}");
+                }
+
+                Thread.Sleep(TimeSpan.FromSeconds(10));
+            }
+        }
+
+        private void SincronizarLeiturasPendentes()
+        {
+            IReadOnlyList<PendingReadingRecord> pendentes = _dataStore.ObterLeiturasPendentes(limit: 100);
+            if (pendentes.Count == 0)
+            {
+                return;
+            }
+
+            Console.WriteLine($"[Servidor][Fallback] A tentar sincronizar {pendentes.Count} leitura(s) pendente(s) para MongoDB.");
+
+            foreach (PendingReadingRecord leitura in pendentes)
+            {
+                _dataStore.RegistarTentativaSincronizacao(leitura.Id);
+
+                bool mongoPersisted = _mongoPersister.PersistirLeituraMongoAsync(
+                    leitura.SensorId,
+                    leitura.TipoDado,
+                    leitura.Valor,
+                    leitura.Zona,
+                    leitura.Timestamp,
+                    leitura.GatewayId,
+                    leitura.OriginalMessage,
+                    leitura.MessageId).GetAwaiter().GetResult();
+
+                if (!mongoPersisted)
+                {
+                    Console.WriteLine($"[Servidor][Fallback] MongoDB ainda indisponivel; leitura pendente mantida no SQLite: id={leitura.Id}.");
+                    break;
+                }
+
+                _dataStore.MarcarLeituraPendenteSincronizada(leitura.Id);
+                Console.WriteLine($"[Servidor][Fallback] Leitura pendente sincronizada: id={leitura.Id}, messageId={leitura.MessageId}");
             }
         }
 
@@ -356,10 +421,10 @@ namespace Servidor
                     return ProcessarGwConnect(partes, ref gatewayId, ref gwConnected);
 
                 case "FORWARD":
-                    return ProcessarForward(partes, gatewayId);
+                    return ProcessarForward(partes, gatewayId, messageId: null);
 
                 case "FORWARD_AGGREGATED":
-                    return ProcessarForwardAggregated(partes, gatewayId);
+                    return ProcessarForwardAggregated(partes, gatewayId, messageId: null);
 
                 case "SENSOR_STATUS":
                     return ProcessarSensorStatus(partes, gatewayId);
@@ -373,7 +438,7 @@ namespace Servidor
             }
         }
 
-        internal string ProcessarMensagemRabbit(string gatewayId, string mensagem)
+        internal string ProcessarMensagemRabbit(string gatewayId, string mensagem, string? messageId = null)
         {
             string[] partes = mensagem.Split(' ', StringSplitOptions.RemoveEmptyEntries);
 
@@ -422,10 +487,10 @@ namespace Servidor
             switch (comando)
             {
                 case "FORWARD":
-                    return ProcessarForward(partes, gatewayId);
+                    return ProcessarForward(partes, gatewayId, messageId);
 
                 case "FORWARD_AGGREGATED":
-                    return ProcessarForwardAggregated(partes, gatewayId);
+                    return ProcessarForwardAggregated(partes, gatewayId, messageId);
 
                 case "SENSOR_STATUS":
                     return ProcessarSensorStatus(partes, gatewayId);
@@ -481,7 +546,7 @@ namespace Servidor
         /// Valida os dados e armazena via DataStore.
         /// Distingue entre ERR_INVALID_DATA e ERR_STORAGE_FULL.
         /// </summary>
-        private string ProcessarForward(string[] partes, string gatewayId)
+        private string ProcessarForward(string[] partes, string gatewayId, string? messageId)
         {
             // Validar formato: FORWARD <sensor_id> <tipo> <valor> <zona> <timestamp>
             if (partes.Length != 6)
@@ -503,28 +568,20 @@ namespace Servidor
                 return "ERR_INVALID_DATA";
             }
 
-            // Armazenar via DataStore (retorna enum com tipo de resultado)
-            ResultadoArmazenamento resultado = _dataStore.ArmazenarMedicao(sensorId, tipoDado, valor, zona, timestamp);
-
-            switch (resultado)
+            ResultadoArmazenamento validacao = _dataStore.ValidarMedicao(sensorId, tipoDado, valor, zona, timestamp, out _);
+            if (validacao != ResultadoArmazenamento.Sucesso)
             {
-                case ResultadoArmazenamento.Sucesso:
-                    bool mongoPersisted = _mongoPersister.PersistirLeituraMongoAsync(sensorId, tipoDado, valor, zona, timestamp, gatewayId, string.Join(' ', partes))
-                        .GetAwaiter()
-                        .GetResult();
-                    return ResolverRespostaPersistenciaMongo(mongoPersisted, gatewayId);
-                case ResultadoArmazenamento.ErroStorage:
-                    return "ERR_STORAGE_FULL";
-                default:
-                    return "ERR_INVALID_DATA";
+                return validacao == ResultadoArmazenamento.ErroStorage ? "ERR_STORAGE_FULL" : "ERR_INVALID_DATA";
             }
+
+            return PersistirLeituraComFallback(sensorId, tipoDado, valor, zona, timestamp, gatewayId, string.Join(' ', partes), messageId);
         }
 
         /// <summary>
         /// Processa FORWARD_AGGREGATED <tipo> <valor_media> <zona> <timestamp>
         /// Valida os dados e armazena via DataStore usando um ID virtual "AGREGADOR".
         /// </summary>
-        private string ProcessarForwardAggregated(string[] partes, string gatewayId)
+        private string ProcessarForwardAggregated(string[] partes, string gatewayId, string? messageId)
         {
             // Validar formato: FORWARD_AGGREGATED <tipo> <valor_media> <zona> <timestamp>
             if (partes.Length != 5)
@@ -538,32 +595,59 @@ namespace Servidor
             string zona = partes[3];
             string timestamp = partes[4];
 
-            // Armazenar usando um ID virtual que representa uma leitura agregada daquela zona
-            ResultadoArmazenamento resultado = _dataStore.ArmazenarMedicao("AGREGADO_" + gatewayId, tipoDado, valor, zona, timestamp);
-
-            switch (resultado)
+            string sensorId = "AGREGADO_" + gatewayId;
+            ResultadoArmazenamento validacao = _dataStore.ValidarMedicao(sensorId, tipoDado, valor, zona, timestamp, out _);
+            if (validacao != ResultadoArmazenamento.Sucesso)
             {
-                case ResultadoArmazenamento.Sucesso:
-                    bool mongoPersisted = _mongoPersister.PersistirLeituraMongoAsync("AGREGADO_" + gatewayId, tipoDado, valor, zona, timestamp, gatewayId, string.Join(' ', partes))
-                        .GetAwaiter()
-                        .GetResult();
-                    return ResolverRespostaPersistenciaMongo(mongoPersisted, gatewayId);
-                case ResultadoArmazenamento.ErroStorage:
-                    return "ERR_STORAGE_FULL";
-                default:
-                    return "ERR_INVALID_DATA";
+                return validacao == ResultadoArmazenamento.ErroStorage ? "ERR_STORAGE_FULL" : "ERR_INVALID_DATA";
             }
+
+            return PersistirLeituraComFallback(sensorId, tipoDado, valor, zona, timestamp, gatewayId, string.Join(' ', partes), messageId);
         }
 
-        private string ResolverRespostaPersistenciaMongo(bool mongoPersisted, string gatewayId)
+        private string PersistirLeituraComFallback(
+            string sensorId,
+            string tipoDado,
+            string valor,
+            string zona,
+            string timestamp,
+            string gatewayId,
+            string mensagemOriginal,
+            string? messageId)
         {
-            if (mongoPersisted || _readingsRepository == null)
+            bool mongoPersisted = _mongoPersister.PersistirLeituraMongoAsync(
+                sensorId,
+                tipoDado,
+                valor,
+                zona,
+                timestamp,
+                gatewayId,
+                mensagemOriginal,
+                messageId).GetAwaiter().GetResult();
+
+            if (mongoPersisted)
             {
                 return "OK";
             }
 
-            Console.WriteLine($"[Servidor][ALERTA] MongoDB indisponível — ERR_STORAGE_FULL enviado ao Gateway {gatewayId}. Leitura guardada no SQLite como fallback.");
-            return "ERR_STORAGE_FULL";
+            ResultadoArmazenamento fallback = _dataStore.ArmazenarLeituraPendente(
+                messageId,
+                sensorId,
+                tipoDado,
+                valor,
+                zona,
+                timestamp,
+                gatewayId,
+                mensagemOriginal);
+
+            if (fallback == ResultadoArmazenamento.Sucesso)
+            {
+                Console.WriteLine($"[Servidor][Fallback] MongoDB indisponivel; leitura guardada no SQLite local e confirmada ao Gateway {gatewayId}.");
+                return "OK";
+            }
+
+            Console.WriteLine($"[Servidor][ALERTA] MongoDB e fallback SQLite falharam para Gateway {gatewayId}.");
+            return fallback == ResultadoArmazenamento.DadosInvalidos ? "ERR_INVALID_DATA" : "ERR_STORAGE_FULL";
         }
 
         /// <summary>
