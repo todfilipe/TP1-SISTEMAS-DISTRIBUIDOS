@@ -336,4 +336,10 @@ function AnalysesPage({ nav, route }) {
   );
 }
 
-window.AnalysesPage = AnalysesPage;
+Object.assign(window, {
+  AnalysesPage,
+  Histogram,
+  BoxPlot,
+  MovingAvgChart
+});
+

@@ -226,6 +226,27 @@ function ForecastPage({ nav }) {
 }
 
 function AnalysisResultInline({ a, unit }) {
+  const [readings, setReadings] = useState(null);
+  const [readingsError, setReadingsError] = useState(null);
+
+  useEffect(() => {
+    setReadings(null);
+    setReadingsError(null);
+    window.api.getReadings({
+      zone: a.zone,
+      type: a.type,
+      sensorId: a.sensorId || undefined,
+      from: a.windowStart,
+      to: a.windowEnd
+    })
+    .then((r) => {
+      setReadings(r.slice().sort((x, y) => new Date(x.timestamp) - new Date(y.timestamp)));
+    })
+    .catch(setReadingsError);
+  }, [a]);
+
+  const { Histogram, BoxPlot, MovingAvgChart } = window;
+
   return (
     <div className="space-y-5">
       <Card>
@@ -239,8 +260,13 @@ function AnalysisResultInline({ a, unit }) {
             </div>
             <h2 className="mt-2 text-xl font-semibold tracking-tight">Análise calculada em direto</h2>
             <div className="text-xs text-ink-500 dark:text-ink-400 mt-1">
-              <span className="font-mono">{fmtDateTime(a.windowStart)}</span> → <span className="font-mono">{fmtDateTime(a.windowEnd)}</span>
+              Janela: <span className="font-mono">{fmtDateTime(a.windowStart)}</span> → <span className="font-mono">{fmtDateTime(a.windowEnd)}</span>
             </div>
+            {a.resultSummary && (
+              <p className="text-sm text-ink-600 dark:text-ink-300 mt-3 bg-ink-50 dark:bg-ink-800/40 p-3 rounded-lg border border-ink-100 dark:border-ink-800/60 leading-relaxed font-medium">
+                {a.resultSummary}
+              </p>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <TrendBadge trend={a.trendClassification} />
@@ -248,14 +274,38 @@ function AnalysisResultInline({ a, unit }) {
           </div>
         </div>
       </Card>
+
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         <StatCard label="Média" value={fmtNumber(a.average, a.type)} unit={unit} accent="petrol" />
         <StatCard label="Mediana" value={fmtNumber(a.median, a.type)} unit={unit} accent="petrol" />
-        <StatCard label="σ" value={fmtNumber(a.standardDeviation, a.type)} unit={unit} />
-        <StatCard label="Mín" value={fmtNumber(a.min, a.type)} unit={unit} accent="emerald" />
-        <StatCard label="Máx" value={fmtNumber(a.max, a.type)} unit={unit} accent="rose" />
-        <StatCard label="Amostras" value={a.sampleCount} sub={`${a.outlierCount} outliers`} />
+        <StatCard label="σ (Desvio Padrão)" value={fmtNumber(a.standardDeviation, a.type)} unit={unit} />
+        <StatCard label="Mínimo" value={fmtNumber(a.min, a.type)} unit={unit} accent="emerald" />
+        <StatCard label="Máximo" value={fmtNumber(a.max, a.type)} unit={unit} accent="rose" />
+        <StatCard label="Outliers" value={a.outlierCount} sub={`em ${a.sampleCount} amostras`} accent={a.outlierCount > 0 ? 'amber' : 'emerald'} />
+        
+        <StatCard label="P25" value={fmtNumber(a.percentile25, a.type)} unit={unit} />
+        <StatCard label="P75" value={fmtNumber(a.percentile75, a.type)} unit={unit} />
+        <StatCard label="P95" value={fmtNumber(a.percentile95, a.type)} unit={unit} />
+        <StatCard label="Média móvel" value={fmtNumber(a.movingAverageLast, a.type)} unit={unit} sub="últimas 5 amostras" accent="petrol" />
+        <StatCard label="Declive (tendência)" value={fmtNumber(a.trendSlope, 'NUM')} sub={a.trendClassification} />
+        <StatCard label="Amostras" value={a.sampleCount.toLocaleString('pt-PT')} />
       </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <Card>
+          <SectionTitle sub={`${a.sampleCount} amostras agrupadas em 10 intervalos`}>Distribuição</SectionTitle>
+          {readingsError ? <Empty title="Erro ao carregar leituras" hint={readingsError.message} /> : readings ? <Histogram values={readings.map((r) => r.value)} unit={unit} /> : <Loading />}
+        </Card>
+        <Card>
+          <SectionTitle sub="min · P25 · mediana · P75 · max">Box-plot</SectionTitle>
+          <div className="py-4"><BoxPlot stats={a} unit={unit} /></div>
+        </Card>
+      </div>
+
+      <Card>
+        <SectionTitle sub="Valor por amostra com média móvel sobreposta">Linha temporal</SectionTitle>
+        {readingsError ? <Empty title="Erro ao carregar leituras" hint={readingsError.message} /> : readings ? <MovingAvgChart readings={readings} /> : <Loading />}
+      </Card>
     </div>
   );
 }
