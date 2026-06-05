@@ -83,8 +83,26 @@ function ForecastPage({ nav }) {
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const [loadError, setLoadError] = useState(null);
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => { window.api.getReadings().then(setAllReadings); }, []);
+  const loadReadings = ({ silent = false } = {}) => {
+    if (!silent) setRefreshing(true);
+    setLoadError(null);
+    window.api.invalidateCache();
+    window.api.getReadings()
+      .then((data) => {
+        setAllReadings(data);
+        setLastUpdated(new Date());
+      })
+      .catch(setLoadError)
+      .finally(() => {
+        if (!silent) setRefreshing(false);
+      });
+  };
+  useEffect(() => { loadReadings(); }, []);
+  const applyDatePreset = (range) => setForm((f) => ({ ...f, ...range }));
 
   const sensorIds = useMemo(() => {
     if (!allReadings) return [];
@@ -101,6 +119,8 @@ function ForecastPage({ nav }) {
       const a = await window.api.runAnalysis({ type: form.type, zone: form.zone, sensorId: form.sensorId, from: form.from || undefined, to: form.to || undefined });
       if (!a) setError('Não há amostras suficientes para os parâmetros indicados.');
       else setResult({ kind: 'analysis', data: a });
+    } catch (err) {
+      setError(err.message || 'Erro ao executar analise.');
     } finally { setBusy(false); }
   };
   const runPrediction = async () => {
@@ -113,8 +133,12 @@ function ForecastPage({ nav }) {
       });
       if (!p) setError('Não há amostras suficientes para os parâmetros indicados (mínimo 3).');
       else setResult({ kind: 'prediction', data: p });
+    } catch (err) {
+      setError(err.message || 'Erro ao executar previsao.');
     } finally { setBusy(false); }
   };
+
+  if (loadError && !allReadings) return <ErrorState error={loadError} retry={loadReadings} />;
 
   return (
     <div className="px-4 lg:px-8 py-6 space-y-5">
@@ -164,6 +188,14 @@ function ForecastPage({ nav }) {
             <Button onClick={runPrediction} disabled={busy}>Executar previsão</Button>
           </div>
         </div>
+        <div className="mt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <DatePresetButtons onApply={applyDatePreset} />
+          <div className="flex items-center gap-2">
+            <RefreshMeta lastUpdated={lastUpdated} refreshing={refreshing} />
+            <Button variant="outline" icon={Icon.Refresh} onClick={() => loadReadings()} disabled={refreshing}>Atualizar leituras</Button>
+          </div>
+        </div>
+        {loadError && allReadings && <div className="mt-3"><InlineError error={loadError} retry={() => loadReadings()} /></div>}
         {error && (
           <div className="mt-3 px-3 py-2 rounded-md bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-300 text-sm ring-1 ring-amber-200 dark:ring-amber-500/30">
             {error}
@@ -262,19 +294,14 @@ function PredictionResultInline({ p }) {
 }
 
 function PredictionHistory() {
-  const sessionPreds = window.api.getSessionPredictions();
-  const [computed, setComputed] = useState(null);
-  useEffect(() => { window.api.getPredictions().then(setComputed); }, []);
-
-  const allPreds = [...sessionPreds, ...(computed || [])];
-  if (!computed && sessionPreds.length === 0) return null;
-  if (allPreds.length === 0) return null;
+  const predictions = window.api.getSessionPredictions();
+  if (predictions.length === 0) return null;
 
   return (
     <Card>
-      <SectionTitle sub="Previsões calculadas nesta sessão e previsões automáticas">Histórico de previsões</SectionTitle>
+      <SectionTitle sub="Previsões calculadas nesta sessão">Histórico de previsões</SectionTitle>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-        {allPreds.map((p) => (
+        {predictions.map((p) => (
           <div key={p.id} className="rounded-lg ring-1 ring-ink-200 dark:ring-ink-800 p-3">
             <div className="flex items-center gap-1.5 flex-wrap">
               <span className="font-mono text-[11px] text-ink-500">{p.id}</span>

@@ -16,19 +16,18 @@ O sistema recolhe dados ambientais (temperatura, humidade, qualidade do ar, ruí
 ## Arquitetura
 
 ```
-SENSOR ──► RabbitMQ ──► GATEWAY ──► gRPC Preprocessing ──► SERVIDOR ──► MongoDB
-            (broker)    (consumidor   (normalização)         (TCP 9090)   (urbanodb)
-                         + agregação                          + gRPC
-                         15 s)                               Analysis)
+SENSOR ──► RabbitMQ ──► GATEWAY ──► gRPC Preprocessing ──► RabbitMQ ──► SERVIDOR ──► MongoDB
+            (broker)    (consumidor   (normalização)         gateway       (orquestra   (urbanodb)
+                         + agregação)                         exchange      gRPC Analysis)
 ```
 
 | Componente | Tecnologia | Responsabilidade |
 |------------|-----------|-----------------|
 | **Sensor** | C# / .NET 8 | Publica leituras e heartbeats em JSON no RabbitMQ; suporta streaming de vídeo via TCP direto |
 | **RabbitMQ** | Docker (rabbitmq:3-management) | Topic Exchange `sensors.exchange`; filas duráveis por Gateway com bindings de zona |
-| **Gateway** | C# / .NET 9 | Consome mensagens do RabbitMQ com ACK/NACK manual, chama gRPC Preprocessing (Polly), agrega médias em janelas de 15 s e encaminha ao Servidor via TCP |
+| **Gateway** | C# / .NET 9 | Consome mensagens do RabbitMQ com ACK/NACK manual, chama gRPC Preprocessing (Polly), agrega médias em janelas de 15 s e publica eventos Gateway→Servidor no RabbitMQ |
 | **Preprocessing** | Python / Docker | Microserviço gRPC (porta 50051): normaliza unidades, valida ranges, faz parsing JSON/XML/CSV |
-| **Servidor** | C# / .NET 8 | Aceita ligações TCP dos Gateways, persiste leituras no **MongoDB** (principal) e SQLite (fallback), expõe CLI com Spectre.Console |
+| **Servidor** | C# / .NET 8 | Consome eventos Gateway→Servidor por RabbitMQ, mantém TCP como compatibilidade, orquestra o Analysis gRPC, persiste leituras/análises no **MongoDB** e expõe CLI/API HTTP |
 | **Analysis** | Python / Docker | Microserviço gRPC puro (porta 50052): estatísticas (média, desvio, outliers Z-score), tendência (regressão linear) e previsão (linear/EWMA) |
 | **MongoDB** | Docker (mongo:7) | Base de dados principal — coleções `readings`, `analyses`, `sensors_metadata` |
 | **SQLite** | Ficheiro local | Fallback automático quando o MongoDB está indisponível |
@@ -43,9 +42,9 @@ SENSOR ──► RabbitMQ ──► GATEWAY ──► gRPC Preprocessing ──�
 3. O **Gateway** consome a mensagem com confirmação manual (ACK/NACK):
    - Chama o **Preprocessing gRPC** para normalizar e validar a leitura (Polly: 3 retries com backoff exponencial). Em falha → NACK com requeue.
    - Acumula as leituras válidas numa fila interna e calcula médias por `(tipo, zona)` a cada 15 segundos.
-   - Envia `FORWARD_AGGREGATED <tipo> <média> <zona> <timestamp>` ao Servidor via TCP (porta 9090).
-4. O **Servidor** recebe o agregado, persiste no **MongoDB** (coleção `readings`) e atualiza os metadados do sensor (coleção `sensors_metadata`). Se o MongoDB estiver indisponível, persiste no SQLite como fallback.
-5. A **CLI do Servidor** (Spectre.Console) permite executar análises e previsões: lê as leituras do MongoDB e delega o cálculo ao **Analysis gRPC**.
+   - Publica `FORWARD_AGGREGATED <tipo> <média> <zona> <timestamp>` no `gateway.exchange`.
+4. O **Servidor** consome `server.gateway.ingest`, persiste no **MongoDB** (coleção `readings`) e atualiza os metadados do sensor (coleção `sensors_metadata`). Se o MongoDB estiver indisponível, persiste no SQLite como fallback.
+5. A **CLI/API HTTP do Servidor** permite executar análises e previsões: lê as leituras do MongoDB e delega o cálculo ao **Analysis gRPC**.
 
 ---
 
@@ -80,13 +79,14 @@ TP1/
 │
 ├── Servidor/                  # Armazenamento central (net8.0)
 │   ├── Program.cs             # Entry point
-│   ├── Servidor.cs            # ServidorTCP — aceita Gateways, persiste no MongoDB
+│   ├── Servidor.cs            # Servidor central — TCP legado, RabbitMQ, MongoDB
+│   ├── ServidorHttpApi.cs     # API HTTP usada pela Dashboard para pedir análises
 │   ├── CliHandler.cs          # CLI Spectre.Console (analisar, prever, leituras, ...)
 │   ├── DataStore.cs           # SQLite (Dapper) — fallback quando MongoDB indisponível
 │   ├── Mongo/                 # Camada MongoDB
 │   │   ├── MongoDbContext.cs  # Contexto e ligação ao MongoDB
 │   │   └── Repositories/     # ReadingsRepository, AnalysesRepository, SensorsMetadataRepository
-│   └── appsettings.json       # URL do Analysis gRPC e connection string do MongoDB
+│   └── appsettings.json       # URL do Analysis gRPC, API HTTP, RabbitMQ e MongoDB
 │
 ├── services/
 │   ├── preprocessing/         # Microserviço gRPC Python (porta 50051)
@@ -150,6 +150,7 @@ Serviços esperados:
 | `rabbitmq` | 5672 / 15672 | Broker AMQP + consola de gestão Web |
 | `preprocessing` | 50051 | Microserviço gRPC de normalização |
 | `analysis` | 50052 | Microserviço gRPC de análise estatística |
+| `servidor` | 9090 / 9091 | TCP legado + API HTTP de orquestração |
 | `mongodb` | 27017 | Base de dados principal |
 | `mongo-express` | 8081 | Interface Web do MongoDB |
 
@@ -165,7 +166,7 @@ cd Servidor
 dotnet run
 ```
 
-O Servidor inicia à escuta na porta TCP `9090` e liga-se ao MongoDB (`urbanodb`). A CLI Spectre.Console fica disponível no mesmo terminal.
+O Servidor inicia à escuta na porta TCP `9090`, na API HTTP `9091` e liga-se ao MongoDB (`urbanodb`). A CLI Spectre.Console fica disponível no mesmo terminal.
 
 ### 4. Iniciar um Gateway
 
@@ -175,6 +176,9 @@ Num novo terminal:
 cd Gateway
 dotnet run [gateway_id] [server_ip] [server_port] [video_port] [binding_pattern]
 ```
+
+Por defeito, o Gateway usa `GATEWAY_SERVER_TRANSPORT=rabbit` e publica para `gateway.exchange`.
+Para testes legados com socket direto, definir `GATEWAY_SERVER_TRANSPORT=tcp`.
 
 **Exemplos:**
 
@@ -294,8 +298,9 @@ Tipos válidos: `TEMP`, `HUM`, `AR`, `RUIDO`, `PM2.5`, `PM10`, `LUZ`, `VIDEO`.
 - **Persistência dupla MongoDB + SQLite:** O Servidor persiste no MongoDB como destino principal. Se o MongoDB estiver indisponível, ativa automaticamente o SQLite como fallback.
 - **Coleções MongoDB:** `readings` (leituras agregadas), `analyses` (resultados de análises gRPC), `sensors_metadata` (metadados e última leitura por sensor).
 - **CLI Spectre.Console:** Interface de administração rica com tabelas, painéis e formatação colorida.
-- **Self-healing Gateway↔Servidor:** Em falha TCP, o Gateway reconecta automaticamente e ressincroniza o estado dos sensores.
-- **Buffer de retentativa:** Até 1000 mensagens em memória com backoff exponencial (5 → 60 s). ⚠ Volátil — mensagens perdem-se em crash do Gateway.
+- **Gateway→Servidor assíncrono:** Gateways publicam envelopes persistentes no `gateway.exchange`; o Servidor consome `server.gateway.ingest` com ACK manual e dead-letter para mensagens inválidas.
+- **Compatibilidade TCP:** O transporte antigo continua disponível com `GATEWAY_SERVER_TRANSPORT=tcp`.
+- **Buffer de retentativa:** Até 1000 mensagens em memória com backoff exponencial (5 → 60 s) para falhas de publicação/entrega local.
 - **Heartbeat monitor:** Sensor sem atividade há mais de 15 s é marcado `indisponivel` e o Servidor é notificado. Volta a `ativo` quando retoma comunicação.
 - **Mutex inter-processos** (`GatewayConfigMutex`, `GatewayVideoLogMutex`) para acesso seguro a ficheiros partilhados entre instâncias de Gateway.
 

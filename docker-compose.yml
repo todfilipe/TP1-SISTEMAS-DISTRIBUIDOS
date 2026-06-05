@@ -2,6 +2,50 @@
 # Arranca o broker RabbitMQ (Fase 2) e os dois serviços RPC Python (Fase 1).
 # Nota: o atributo "version" foi removido por estar obsoleto em Docker Compose v2+.
 
+x-sensor-node-common: &sensor-node-common
+  build:
+    context: .
+    dockerfile: SensorNode/Dockerfile
+  environment: &sensor-node-env
+    INTERVAL_SECONDS: 5
+    RABBIT_HOST: rabbitmq
+    RABBIT_PORT: 5672
+    RABBIT_USER: admin
+    RABBIT_PASS: admin
+    RABBIT_VHOST: onehealth
+    PAYLOAD_FORMAT: JSON
+    ENVIRONMENT_SERVICE_URL: http://environment:8001
+  depends_on:
+    rabbitmq:
+      condition: service_healthy
+    environment:
+      condition: service_healthy
+  networks:
+    - sd-net
+  restart: unless-stopped
+
+x-sensor-csharp-common: &sensor-csharp-common
+  build:
+    context: .
+    dockerfile: Sensor/Dockerfile
+  environment: &sensor-csharp-env
+    INTERVAL_SECONDS: 5
+    RABBIT_HOST: rabbitmq
+    RABBIT_PORT: 5672
+    RABBIT_USER: admin
+    RABBIT_PASS: admin
+    RABBIT_VHOST: onehealth
+    PAYLOAD_FORMAT: JSON
+    ENVIRONMENT_SERVICE_URL: http://environment:8001
+  depends_on:
+    rabbitmq:
+      condition: service_healthy
+    environment:
+      condition: service_healthy
+  networks:
+    - sd-net
+  restart: unless-stopped
+
 services:
   # ─────────────────────────────────────────────────────────────
   # RabbitMQ — broker Pub/Sub (usado na Fase 2)
@@ -115,6 +159,39 @@ services:
       - sd-net
     restart: unless-stopped
 
+  servidor:
+    build:
+      context: .
+      dockerfile: Servidor/Dockerfile
+    container_name: servidor
+    ports:
+      - "9090:9090"
+      - "9091:9091"
+    environment:
+      MONGODB_URI: mongodb://${MONGODB_ROOT_USERNAME:-admin}:${MONGODB_ROOT_PASSWORD:-admin}@mongodb:27017/${MONGODB_DATABASE:-urbanodb}?authSource=admin
+      MONGODB_DATABASE: ${MONGODB_DATABASE:-urbanodb}
+      ANALYSIS_SERVICE_URL: http://analysis:50052
+      SERVER_HTTP_ENABLED: "true"
+      SERVER_HTTP_PORT: 9091
+      SERVER_RABBIT_ENABLED: "true"
+      RABBIT_HOST: rabbitmq
+      RABBIT_PORT: 5672
+      RABBIT_USER: admin
+      RABBIT_PASS: admin
+      RABBIT_VHOST: onehealth
+      RABBIT_GATEWAY_EXCHANGE: gateway.exchange
+      RABBIT_GATEWAY_QUEUE: server.gateway.ingest
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      analysis:
+        condition: service_healthy
+    networks:
+      - sd-net
+    restart: unless-stopped
+
   # Dashboard web - paginas HTML e JSON sobre os dados MongoDB
   dashboard:
     build:
@@ -125,9 +202,12 @@ services:
       - "3000:3000"
     environment:
       MONGODB_URI: mongodb://${MONGODB_ROOT_USERNAME:-admin}:${MONGODB_ROOT_PASSWORD:-admin}@mongodb:27017/${MONGODB_DATABASE:-urbanodb}?authSource=admin
+      SERVER_API_URL: http://servidor:9091
     depends_on:
       mongodb:
         condition: service_healthy
+      servidor:
+        condition: service_started
     networks:
       - sd-net
     restart: unless-stopped
@@ -147,31 +227,292 @@ services:
       retries: 5
       start_period: 10s
 
-  sensor-node:
+  gateway-centro:
     build:
       context: .
-      dockerfile: SensorNode/Dockerfile
-    container_name: sensor-node
+      dockerfile: Gateway/Dockerfile
+    container_name: gateway-centro
+    command: ["GW_CENTRO", "servidor", "9090", "8081", "ZONA_CENTRO.#"]
     environment:
-      SENSOR_ID: ${SENSOR_NODE_ID:-SNJ01}
-      SENSOR_ZONE: ${SENSOR_NODE_ZONE:-ZONA_CENTRO}
-      SENSOR_TYPE: ${SENSOR_NODE_TYPE:-TEMP}
-      INTERVAL_SECONDS: ${SENSOR_NODE_INTERVAL_SECONDS:-5}
-      RABBIT_HOST: ${SENSOR_NODE_RABBIT_HOST:-rabbitmq}
-      RABBIT_PORT: ${SENSOR_NODE_RABBIT_PORT:-5672}
-      RABBIT_USER: ${SENSOR_NODE_RABBIT_USER:-admin}
-      RABBIT_PASS: ${SENSOR_NODE_RABBIT_PASS:-admin}
-      RABBIT_VHOST: ${SENSOR_NODE_RABBIT_VHOST:-onehealth}
-      PAYLOAD_FORMAT: ${SENSOR_NODE_PAYLOAD_FORMAT:-JSON}
-      ENVIRONMENT_SERVICE_URL: ${ENVIRONMENT_SERVICE_URL:-http://environment:8001}
+      GATEWAY_SERVER_TRANSPORT: rabbit
+      RABBIT_HOST: rabbitmq
+      RABBIT_PORT: 5672
+      RABBIT_USER: admin
+      RABBIT_PASS: admin
+      RABBIT_VHOST: onehealth
+      RABBIT_EXCHANGE: sensors.exchange
+      RABBIT_GATEWAY_EXCHANGE: gateway.exchange
+      PREPROCESSING_SERVICE_URL: http://preprocessing:50051
     depends_on:
       rabbitmq:
         condition: service_healthy
-      environment:
+      preprocessing:
         condition: service_healthy
     networks:
       - sd-net
     restart: unless-stopped
+
+  gateway-escolar:
+    build:
+      context: .
+      dockerfile: Gateway/Dockerfile
+    container_name: gateway-escolar
+    command: ["GW_ESCOLAR", "servidor", "9090", "8082", "ZONA_ESCOLAR.#"]
+    environment:
+      GATEWAY_SERVER_TRANSPORT: rabbit
+      RABBIT_HOST: rabbitmq
+      RABBIT_PORT: 5672
+      RABBIT_USER: admin
+      RABBIT_PASS: admin
+      RABBIT_VHOST: onehealth
+      RABBIT_EXCHANGE: sensors.exchange
+      RABBIT_GATEWAY_EXCHANGE: gateway.exchange
+      PREPROCESSING_SERVICE_URL: http://preprocessing:50051
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      preprocessing:
+        condition: service_healthy
+    networks:
+      - sd-net
+    restart: unless-stopped
+
+  gateway-industrial:
+    build:
+      context: .
+      dockerfile: Gateway/Dockerfile
+    container_name: gateway-industrial
+    command: ["GW_INDUSTRIAL", "servidor", "9090", "8083", "ZONA_INDUSTRIAL.#"]
+    environment:
+      GATEWAY_SERVER_TRANSPORT: rabbit
+      RABBIT_HOST: rabbitmq
+      RABBIT_PORT: 5672
+      RABBIT_USER: admin
+      RABBIT_PASS: admin
+      RABBIT_VHOST: onehealth
+      RABBIT_EXCHANGE: sensors.exchange
+      RABBIT_GATEWAY_EXCHANGE: gateway.exchange
+      PREPROCESSING_SERVICE_URL: http://preprocessing:50051
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      preprocessing:
+        condition: service_healthy
+    networks:
+      - sd-net
+    restart: unless-stopped
+
+  gateway-residencial:
+    build:
+      context: .
+      dockerfile: Gateway/Dockerfile
+    container_name: gateway-residencial
+    command: ["GW_RESIDENCIAL", "servidor", "9090", "8084", "ZONA_RESIDENCIAL.#"]
+    environment:
+      GATEWAY_SERVER_TRANSPORT: rabbit
+      RABBIT_HOST: rabbitmq
+      RABBIT_PORT: 5672
+      RABBIT_USER: admin
+      RABBIT_PASS: admin
+      RABBIT_VHOST: onehealth
+      RABBIT_EXCHANGE: sensors.exchange
+      RABBIT_GATEWAY_EXCHANGE: gateway.exchange
+      PREPROCESSING_SERVICE_URL: http://preprocessing:50051
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      preprocessing:
+        condition: service_healthy
+    networks:
+      - sd-net
+    restart: unless-stopped
+
+  gateway-parque:
+    build:
+      context: .
+      dockerfile: Gateway/Dockerfile
+    container_name: gateway-parque
+    command: ["GW_PARQUE", "servidor", "9090", "8085", "ZONA_PARQUE.#"]
+    environment:
+      GATEWAY_SERVER_TRANSPORT: rabbit
+      RABBIT_HOST: rabbitmq
+      RABBIT_PORT: 5672
+      RABBIT_USER: admin
+      RABBIT_PASS: admin
+      RABBIT_VHOST: onehealth
+      RABBIT_EXCHANGE: sensors.exchange
+      RABBIT_GATEWAY_EXCHANGE: gateway.exchange
+      PREPROCESSING_SERVICE_URL: http://preprocessing:50051
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      preprocessing:
+        condition: service_healthy
+    networks:
+      - sd-net
+    restart: unless-stopped
+
+  sensor-node-zc01:
+    <<: *sensor-node-common
+    container_name: sensor-node-zc01
+    environment:
+      <<: *sensor-node-env
+      SENSOR_ID: ZC01
+      SENSOR_ZONE: ZONA_CENTRO
+      SENSOR_TYPE: TEMP,HUM,RUIDO,LUZ,PM2.5,PM10,AR
+
+  sensor-node-zc02:
+    <<: *sensor-node-common
+    container_name: sensor-node-zc02
+    environment:
+      <<: *sensor-node-env
+      SENSOR_ID: ZC02
+      SENSOR_ZONE: ZONA_CENTRO
+      SENSOR_TYPE: TEMP,HUM,RUIDO,PM2.5,PM10,AR
+
+  sensor-node-zc03:
+    <<: *sensor-node-common
+    container_name: sensor-node-zc03
+    environment:
+      <<: *sensor-node-env
+      SENSOR_ID: ZC03
+      SENSOR_ZONE: ZONA_CENTRO
+      SENSOR_TYPE: TEMP,RUIDO,LUZ,PM2.5,PM10
+
+  sensor-csharp-zc99:
+    <<: *sensor-csharp-common
+    container_name: sensor-csharp-zc99
+    environment:
+      <<: *sensor-csharp-env
+      SENSOR_ID: ZC99
+      SENSOR_ZONE: ZONA_CENTRO
+      SENSOR_TYPE: PM2.5,PM10,AR
+
+  sensor-node-ze01:
+    <<: *sensor-node-common
+    container_name: sensor-node-ze01
+    environment:
+      <<: *sensor-node-env
+      SENSOR_ID: ZE01
+      SENSOR_ZONE: ZONA_ESCOLAR
+      SENSOR_TYPE: TEMP,HUM,RUIDO,LUZ,PM2.5,AR
+
+  sensor-node-ze02:
+    <<: *sensor-node-common
+    container_name: sensor-node-ze02
+    environment:
+      <<: *sensor-node-env
+      SENSOR_ID: ZE02
+      SENSOR_ZONE: ZONA_ESCOLAR
+      SENSOR_TYPE: TEMP,HUM,RUIDO,LUZ,PM2.5
+
+  sensor-csharp-ze99:
+    <<: *sensor-csharp-common
+    container_name: sensor-csharp-ze99
+    environment:
+      <<: *sensor-csharp-env
+      SENSOR_ID: ZE99
+      SENSOR_ZONE: ZONA_ESCOLAR
+      SENSOR_TYPE: RUIDO,PM2.5,AR
+
+  sensor-node-zi01:
+    <<: *sensor-node-common
+    container_name: sensor-node-zi01
+    environment:
+      <<: *sensor-node-env
+      SENSOR_ID: ZI01
+      SENSOR_ZONE: ZONA_INDUSTRIAL
+      SENSOR_TYPE: TEMP,HUM,RUIDO,PM2.5,PM10,AR
+
+  sensor-node-zi02:
+    <<: *sensor-node-common
+    container_name: sensor-node-zi02
+    environment:
+      <<: *sensor-node-env
+      SENSOR_ID: ZI02
+      SENSOR_ZONE: ZONA_INDUSTRIAL
+      SENSOR_TYPE: TEMP,HUM,RUIDO,PM2.5,PM10,AR
+
+  sensor-node-zi03:
+    <<: *sensor-node-common
+    container_name: sensor-node-zi03
+    environment:
+      <<: *sensor-node-env
+      SENSOR_ID: ZI03
+      SENSOR_ZONE: ZONA_INDUSTRIAL
+      SENSOR_TYPE: TEMP,RUIDO,PM2.5,PM10,AR
+
+  sensor-node-zi04:
+    <<: *sensor-node-common
+    container_name: sensor-node-zi04
+    environment:
+      <<: *sensor-node-env
+      SENSOR_ID: ZI04
+      SENSOR_ZONE: ZONA_INDUSTRIAL
+      SENSOR_TYPE: TEMP,HUM,RUIDO,PM10,AR
+
+  sensor-csharp-zi99:
+    <<: *sensor-csharp-common
+    container_name: sensor-csharp-zi99
+    environment:
+      <<: *sensor-csharp-env
+      SENSOR_ID: ZI99
+      SENSOR_ZONE: ZONA_INDUSTRIAL
+      SENSOR_TYPE: PM2.5,PM10,AR,RUIDO
+
+  sensor-node-zr01:
+    <<: *sensor-node-common
+    container_name: sensor-node-zr01
+    environment:
+      <<: *sensor-node-env
+      SENSOR_ID: ZR01
+      SENSOR_ZONE: ZONA_RESIDENCIAL
+      SENSOR_TYPE: TEMP,HUM,RUIDO,LUZ,PM2.5,PM10
+
+  sensor-node-zr02:
+    <<: *sensor-node-common
+    container_name: sensor-node-zr02
+    environment:
+      <<: *sensor-node-env
+      SENSOR_ID: ZR02
+      SENSOR_ZONE: ZONA_RESIDENCIAL
+      SENSOR_TYPE: TEMP,HUM,RUIDO,LUZ,PM2.5
+
+  sensor-csharp-zr99:
+    <<: *sensor-csharp-common
+    container_name: sensor-csharp-zr99
+    environment:
+      <<: *sensor-csharp-env
+      SENSOR_ID: ZR99
+      SENSOR_ZONE: ZONA_RESIDENCIAL
+      SENSOR_TYPE: PM2.5,PM10
+
+  sensor-node-zp01:
+    <<: *sensor-node-common
+    container_name: sensor-node-zp01
+    environment:
+      <<: *sensor-node-env
+      SENSOR_ID: ZP01
+      SENSOR_ZONE: ZONA_PARQUE
+      SENSOR_TYPE: TEMP,HUM,RUIDO,LUZ,PM2.5,AR
+
+  sensor-node-zp02:
+    <<: *sensor-node-common
+    container_name: sensor-node-zp02
+    environment:
+      <<: *sensor-node-env
+      SENSOR_ID: ZP02
+      SENSOR_ZONE: ZONA_PARQUE
+      SENSOR_TYPE: TEMP,HUM,RUIDO,LUZ
+
+  sensor-csharp-zp99:
+    <<: *sensor-csharp-common
+    container_name: sensor-csharp-zp99
+    environment:
+      <<: *sensor-csharp-env
+      SENSOR_ID: ZP99
+      SENSOR_ZONE: ZONA_PARQUE
+      SENSOR_TYPE: PM2.5,AR
 
 # Rede explicita partilhada por todos os servicos (e, futuramente,
 # pelos contentores de Gateway/Servidor quando forem dockerizados).

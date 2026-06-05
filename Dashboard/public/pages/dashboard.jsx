@@ -2,7 +2,7 @@
 // pages/dashboard.jsx — Visão geral
 // =====================================================================
 
-function KPI({ label, value, hint, accent, icon: IconComp }) {
+function KPI({ label, value, hint, accent, icon: IconComp, onClick }) {
   const accents = {
     petrol: 'bg-petrol-50 text-petrol-700 dark:bg-petrol-500/15 dark:text-petrol-300',
     moss: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300',
@@ -10,8 +10,8 @@ function KPI({ label, value, hint, accent, icon: IconComp }) {
     ink: 'bg-ink-100 text-ink-700 dark:bg-ink-800 dark:text-ink-200',
     rose: 'bg-rose-50 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300'
   };
-  return (
-    <Card padding="p-4">
+  const content = (
+    <Card padding="p-4" className={onClick ? 'h-full transition-colors hover:border-petrol-300 dark:hover:border-petrol-600' : ''}>
       <div className="flex items-start gap-3">
         <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${accents[accent || 'ink']}`}>
           {IconComp && <IconComp width={18} height={18} />}
@@ -22,7 +22,14 @@ function KPI({ label, value, hint, accent, icon: IconComp }) {
           {hint && <div className="text-[11px] text-ink-500 dark:text-ink-400 mt-0.5">{hint}</div>}
         </div>
       </div>
-    </Card>);
+    </Card>
+  );
+  if (!onClick) return content;
+  return (
+    <button type="button" onClick={onClick} className="block w-full h-full text-left rounded-xl focus:outline-none focus:ring-2 focus:ring-petrol-500/40">
+      {content}
+    </button>
+  );
 
 }
 
@@ -160,43 +167,27 @@ function AlertRow({ r }) {
 
 }
 
-function ArchitectureNote() {
-  return (
-    <Card padding="p-5">
-      <SectionTitle sub="Pub/Sub → Gateways → Servidor → BD · Análise via gRPC">Sobre o sistema</SectionTitle>
-      <div className="flex items-center gap-2 text-[11px] font-mono uppercase tracking-wide overflow-x-auto scroll-thin pb-1">
-        {['Sensores', 'RabbitMQ', 'Gateways', 'Pré-processamento', 'Servidor', 'MongoDB'].map((step, i, arr) =>
-        <React.Fragment key={step}>
-            <span className="shrink-0 px-2 py-1 rounded bg-ink-100 dark:bg-ink-800 text-ink-700 dark:text-ink-200">{step}</span>
-            {i < arr.length - 1 && <Icon.ArrowRight width={12} height={12} className="shrink-0 text-ink-400" />}
-          </React.Fragment>
-        )}
-      </div>
-      <div className="mt-2 flex items-center gap-2 text-[11px] font-mono uppercase tracking-wide">
-        <span className="px-2 py-1 rounded bg-ink-100 dark:bg-ink-800 text-ink-700 dark:text-ink-200">Servidor</span>
-        <span className="text-ink-400">↔</span>
-        <span className="px-2 py-1 rounded bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">Análise gRPC (Python)</span>
-      </div>
-      <p className="mt-3 text-[12px] text-ink-500 dark:text-ink-400 leading-relaxed">
-        Esta interface lê do Servidor/BD e da Análise. O paradigma <span className="font-semibold text-ink-700 dark:text-ink-200">One Health</span> liga saúde
-        humana, animal e ambiental — os indicadores ambientais permitem antecipar riscos para a saúde pública urbana.
-      </p>
-    </Card>);
-
-}
-
 function DashboardPage({ nav }) {
   const [data, setData] = useState(null);
-  useEffect(() => {
+  const [error, setError] = useState(null);
+  const loadDashboard = () => {
+    setError(null);
     Promise.all([
     window.api.getReadings(),
     window.api.getSensors(),
-    window.api.getAnalyses()]
-    ).then(([readings, sensors, analyses]) => setData({ readings, sensors, analyses }));
-  }, []);
+    window.api.getAnalyses(),
+    window.api.getStatus()]
+    ).then(([readings, sensors, analyses, status]) => setData({ readings, sensors, analyses, status }))
+    .catch((err) => {
+      setData(null);
+      setError(err);
+    });
+  };
+  useEffect(() => { loadDashboard(); }, []);
 
+  if (error) return <ErrorState error={error} retry={loadDashboard} />;
   if (!data) return <Loading />;
-  const { readings, sensors, analyses } = data;
+  const { readings, sensors, analyses, status } = data;
 
   // Última leitura por (zone, type)
   const lastByZoneType = {};
@@ -230,17 +221,26 @@ function DashboardPage({ nav }) {
 
   const activeSensorIds = new Set(sensors.filter((s) => s.estado === 'ativo').map((s) => s.sensorId));
   const zonesMonitored = new Set(sensors.map((s) => s.zone)).size;
-  const activeAlerts = readings.filter((r) => window.api.classifyAlert(r.type, r.value) !== 'NORMAL').length;
+  // "Ativos" = estado atual em alerta (última leitura por zona/tipo), não todo o histórico — mesma base do mapa
+  const activeAlerts = Object.values(lastByZoneType).filter((r) => window.api.classifyAlert(r.type, r.value) !== 'NORMAL').length;
+  const totalReadings = status.totalReadings ?? readings.length;
 
   return (
-    <div className="px-4 lg:px-8 py-6 space-y-6" style={{ width: "1006px" }}>
+    <div className="px-4 lg:px-8 py-6 space-y-6">
       {/* KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
-        <KPI label="Leituras" value={readings.length.toLocaleString('pt-PT')} hint="últimos 3 dias" accent="petrol" icon={Icon.Pulse} />
+        <KPI label="Leituras" value={totalReadings.toLocaleString('pt-PT')} hint="total na BD" accent="petrol" icon={Icon.Pulse} />
         <KPI label="Sensores ativos" value={`${activeSensorIds.size}/${new Set(sensors.map((s) => s.sensorId)).size}`} hint="estado: ativo" accent="moss" icon={Icon.Sensors} />
         <KPI label="Zonas monitorizadas" value={zonesMonitored} hint="cobertura urbana" accent="ink" icon={Icon.Dashboard} />
         <KPI label="Análises" value={analyses.length} hint="histórico estatístico" accent="ink" icon={Icon.Analyses} />
-        <KPI label="Alertas ativos" value={activeAlerts} hint="WARNING + CRITICAL" accent={activeAlerts > 0 ? 'rose' : 'moss'} icon={Icon.Bell} />
+        <KPI
+          label="Alertas ativos"
+          value={activeAlerts}
+          hint="WARNING + CRITICAL"
+          accent={activeAlerts > 0 ? 'rose' : 'moss'}
+          icon={Icon.Bell}
+          onClick={() => nav('/leituras?alert=active')}
+        />
       </div>
 
       {/* Mapa + Alertas */}
@@ -253,7 +253,7 @@ function DashboardPage({ nav }) {
         </Card>
         <Card>
           <SectionTitle sub={`${alerts.length} eventos recentes`} action={
-          <a href="#/leituras" className="text-[11px] text-petrol-600 dark:text-petrol-300 hover:underline">Ver todos →</a>
+          <a href="#/leituras?alert=active" className="text-[11px] text-petrol-600 dark:text-petrol-300 hover:underline">Ver todos →</a>
           }>Alertas recentes</SectionTitle>
           <div className="max-h-[360px] overflow-y-auto scroll-thin -mx-1 px-1">
             {alerts.length === 0 ?
@@ -273,23 +273,21 @@ function DashboardPage({ nav }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2">
-          <Card>
-            <SectionTitle sub="Distribuição de leituras por zona nos últimos 3 dias">Atividade por zona</SectionTitle>
-            <ZoneActivityChart readings={readings} />
-          </Card>
-        </div>
-        <ArchitectureNote />
-      </div>
+      <Card>
+        <SectionTitle sub="Distribuição de leituras por zona nos últimos 3 dias">Atividade por zona</SectionTitle>
+        <ZoneActivityChart readings={readings} />
+      </Card>
     </div>);
 
 }
 
 function ZoneActivityChart({ readings }) {
   const { BarChart, Bar, ResponsiveContainer, XAxis, YAxis, Tooltip, CartesianGrid, Legend } = window.Recharts;
+  // Apenas os últimos 3 dias (conforme subtítulo)
+  const cutoff = Date.now() - 3 * 24 * 60 * 60 * 1000;
+  const recent = readings.filter((r) => new Date(r.timestamp).getTime() >= cutoff);
   const data = window.api.ZONAS.map((z) => {
-    const inZone = readings.filter((r) => r.zone === z);
+    const inZone = recent.filter((r) => r.zone === z);
     const normal = inZone.filter((r) => window.api.classifyAlert(r.type, r.value) === 'NORMAL').length;
     const warning = inZone.filter((r) => window.api.classifyAlert(r.type, r.value) === 'WARNING').length;
     const critical = inZone.filter((r) => window.api.classifyAlert(r.type, r.value) === 'CRITICAL').length;

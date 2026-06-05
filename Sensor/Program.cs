@@ -7,6 +7,34 @@ namespace Sensor;
 
 class Program
 {
+    private static string? FirstEnv(params string[] names)
+    {
+        foreach (string name in names)
+        {
+            string? value = Environment.GetEnvironmentVariable(name);
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return value;
+            }
+        }
+
+        return null;
+    }
+
+    private static int FirstEnvInt(int fallback, params string[] names)
+    {
+        foreach (string name in names)
+        {
+            string? value = Environment.GetEnvironmentVariable(name);
+            if (int.TryParse(value, out int parsed) && parsed > 0)
+            {
+                return parsed;
+            }
+        }
+
+        return fallback;
+    }
+
     static void Main(string[] args)
     {
         // Se o utilizador passar o argumento --auto, corre no modo automático parametrizado
@@ -99,6 +127,17 @@ class Program
             intervalSeconds = int.TryParse(config["Sensor:IntervalSeconds"], out int sec) ? sec : intervalSeconds;
             payloadFormat = config["Sensor:PayloadFormat"] ?? payloadFormat;
         }
+
+        rabbitHost = FirstEnv("RABBIT_HOST", "SENSOR_CSHARP_RABBIT_HOST", "RABBITMQ_HOST") ?? rabbitHost;
+        rabbitPort = FirstEnvInt(rabbitPort, "RABBIT_PORT", "SENSOR_CSHARP_RABBIT_PORT", "RABBITMQ_PORT");
+        rabbitUser = FirstEnv("RABBIT_USER", "SENSOR_CSHARP_RABBIT_USER", "RABBITMQ_USER") ?? rabbitUser;
+        rabbitPass = FirstEnv("RABBIT_PASS", "SENSOR_CSHARP_RABBIT_PASS", "RABBITMQ_PASSWORD") ?? rabbitPass;
+        rabbitVHost = FirstEnv("RABBIT_VHOST", "SENSOR_CSHARP_RABBIT_VHOST", "RABBITMQ_VHOST") ?? rabbitVHost;
+        sensorId = FirstEnv("SENSOR_ID", "SENSOR_CSHARP_ID") ?? sensorId;
+        zone = FirstEnv("SENSOR_ZONE", "SENSOR_CSHARP_ZONE") ?? zone;
+        type = FirstEnv("SENSOR_TYPE", "SENSOR_CSHARP_TYPE") ?? type;
+        intervalSeconds = FirstEnvInt(intervalSeconds, "INTERVAL_SECONDS", "SENSOR_CSHARP_INTERVAL_SECONDS");
+        payloadFormat = FirstEnv("PAYLOAD_FORMAT", "SENSOR_CSHARP_PAYLOAD_FORMAT") ?? payloadFormat;
 
         // Criar e iniciar o cliente automático
         using var client = new SensorClient(

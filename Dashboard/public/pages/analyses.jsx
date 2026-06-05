@@ -136,14 +136,28 @@ function MovingAvgChart({ readings, movingWindow = 5 }) {
 function AnalysisDetail({ id, nav }) {
   const [analysis, setAnalysis] = useState(null);
   const [readings, setReadings] = useState(null);
-  useEffect(() => {
+  const [error, setError] = useState(null);
+  const [readingsError, setReadingsError] = useState(null);
+  const loadAnalysis = () => {
+    setAnalysis(null);
+    setReadings(null);
+    setError(null);
+    setReadingsError(null);
     window.api.getAnalysisById(id).then((a) => {
+      if (!a) {
+        setError(new Error('Analise nao encontrada.'));
+        return;
+      }
       setAnalysis(a);
       if (a) window.api.getReadings({ zone: a.zone, type: a.type, sensorId: a.sensorId, from: a.windowStart, to: a.windowEnd }).then((r) => {
         setReadings(r.slice().sort((x,y) => new Date(x.timestamp) - new Date(y.timestamp)));
-      });
-    });
+      }).catch(setReadingsError);
+    }).catch(setError);
+  };
+  useEffect(() => {
+    loadAnalysis();
   }, [id]);
+  if (error) return <ErrorState error={error} retry={loadAnalysis} />;
   if (!analysis) return <Loading />;
   const unit = window.api.UNIDADES[analysis.type] || '';
 
@@ -196,7 +210,7 @@ function AnalysisDetail({ id, nav }) {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <Card>
           <SectionTitle sub={`${analysis.sampleCount} amostras agrupadas em 10 intervalos`}>Distribuição</SectionTitle>
-          {readings ? <Histogram values={readings.map((r) => r.value)} unit={unit} /> : <Loading />}
+          {readingsError ? <Empty title="Erro ao carregar leituras" hint={readingsError.message} /> : readings ? <Histogram values={readings.map((r) => r.value)} unit={unit} /> : <Loading />}
         </Card>
         <Card>
           <SectionTitle sub="min · P25 · mediana · P75 · max">Box-plot</SectionTitle>
@@ -206,7 +220,7 @@ function AnalysisDetail({ id, nav }) {
 
       <Card>
         <SectionTitle sub="Valor por amostra com média móvel sobreposta">Linha temporal</SectionTitle>
-        {readings ? <MovingAvgChart readings={readings} /> : <Loading />}
+        {readingsError ? <Empty title="Erro ao carregar leituras" hint={readingsError.message} /> : readings ? <MovingAvgChart readings={readings} /> : <Loading />}
       </Card>
     </div>
   );
@@ -218,13 +232,20 @@ function AnalysesPage({ nav, route }) {
   if (match) return <AnalysisDetail id={match[1]} nav={nav} />;
 
   const [analyses, setAnalyses] = useState(null);
+  const [error, setError] = useState(null);
   const [filter, setFilter] = useState({ zone: null, type: null, alert: null });
+  const loadAnalyses = () => {
+    setError(null);
+    window.api.getAnalyses()
+      .then(setAnalyses)
+      .catch(setError);
+  };
   useEffect(() => {
-    const load = () => window.api.getAnalyses().then(setAnalyses);
-    load();
-    const id = setInterval(load, 30000);
+    loadAnalyses();
+    const id = setInterval(loadAnalyses, 30000);
     return () => clearInterval(id);
   }, []);
+  if (error && !analyses) return <ErrorState error={error} retry={loadAnalyses} />;
   if (!analyses) return <Loading />;
 
   const sessionAnalyses = window.api.getSessionAnalyses();

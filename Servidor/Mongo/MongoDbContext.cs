@@ -69,16 +69,16 @@ public class MongoDbContext
 
     private static string ResolveConnectionString(IConfiguration configuration)
     {
-        string? configured = configuration["MongoDb:ConnectionString"];
-        if (!string.IsNullOrWhiteSpace(configured))
-        {
-            return configured;
-        }
-
         string? envConnectionString = Environment.GetEnvironmentVariable("MONGODB_URI");
         if (!string.IsNullOrWhiteSpace(envConnectionString))
         {
             return envConnectionString;
+        }
+
+        string? configured = configuration["MongoDb:ConnectionString"];
+        if (!string.IsNullOrWhiteSpace(configured))
+        {
+            return configured;
         }
 
         string username = configuration["MongoDb:Username"]

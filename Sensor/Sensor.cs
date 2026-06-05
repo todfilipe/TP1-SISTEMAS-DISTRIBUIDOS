@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Globalization;
+using System.Linq;
 using System.Net.Http;
 using System.Net.Sockets;
 using System.Security;
@@ -30,6 +31,7 @@ public class SensorClient : IDisposable
     private readonly int _rabbitPort;
     private string _zone;
     private readonly string _type;
+    private readonly List<string> _types;
     private readonly int _intervalSeconds;
     private readonly string _rabbitUser;
     private readonly string _rabbitPass;
@@ -91,7 +93,8 @@ public class SensorClient : IDisposable
         _gatewayHost = gatewayHost;
         _rabbitPort = rabbitPort;
         _zone = zone;
-        _type = type;
+        _types = ParseTypes(type);
+        _type = _types[0];
         _intervalSeconds = intervalSeconds;
         _rabbitUser = rabbitUser;
         _rabbitPass = rabbitPass;
@@ -102,6 +105,21 @@ public class SensorClient : IDisposable
             .TrimEnd('/');
 
         _connectionFactory = CreateConnectionFactory();
+    }
+
+    private static List<string> ParseTypes(string typeList)
+    {
+        var types = new List<string>();
+        foreach (string rawType in (typeList ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            string type = rawType.ToUpperInvariant();
+            if (ProtocolConstants.IsValidSensorType(type) && !types.Contains(type, StringComparer.OrdinalIgnoreCase))
+            {
+                types.Add(type);
+            }
+        }
+
+        return types.Count > 0 ? types : new List<string> { "TEMP" };
     }
 
     /// <summary>
@@ -393,7 +411,7 @@ public class SensorClient : IDisposable
             Console.WriteLine($"║   SENSOR AUTOMÁTICO — ID: {_sensorId,-18} ║");
             Console.WriteLine($"╠══════════════════════════════════════════════╣");
             Console.WriteLine($"║   Zona:      {_zone,-31} ║");
-            Console.WriteLine($"║   Tipo:      {_type,-31} ║");
+            Console.WriteLine($"║   Tipos:     {string.Join(",", _types),-31} ║");
             Console.WriteLine($"║   Intervalo: {_intervalSeconds + " segundos",-31} ║");
             Console.WriteLine($"║   Payload:   {_payloadFormat,-31} ║");
             Console.WriteLine($"╚══════════════════════════════════════════════╝");
@@ -406,19 +424,22 @@ public class SensorClient : IDisposable
             {
                 try
                 {
-                    double val = GenerateSimulatedValue(_type);
-                    string valStr = val.ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
-                    string ts = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss");
+                    foreach (string type in _types)
+                    {
+                        double val = GenerateSimulatedValue(type);
+                        string valStr = val.ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
+                        string ts = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss");
 
-                    string resp = SendData(_type, valStr, _zone, ts);
-                    if (resp == "OK")
-                    {
-                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [DATA SENT] {_zone}.{_type}.{_sensorId} -> {valStr} {SensorTypes.GetUnitForType(_type)}");
-                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [PAYLOAD] rawFormat={_payloadFormat}");
-                    }
-                    else
-                    {
-                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [AVISO] Falha ao enviar dados: {resp}");
+                        string resp = SendData(type, valStr, _zone, ts);
+                        if (resp == "OK")
+                        {
+                            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [DATA SENT] {_zone}.{type}.{_sensorId} -> {valStr} {SensorTypes.GetUnitForType(type)}");
+                            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [PAYLOAD] rawFormat={_payloadFormat}");
+                        }
+                        else
+                        {
+                            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [AVISO] Falha ao enviar dados ({type}): {resp}");
+                        }
                     }
                 }
                 catch (Exception ex)

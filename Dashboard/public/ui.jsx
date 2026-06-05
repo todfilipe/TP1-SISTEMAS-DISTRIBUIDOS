@@ -63,6 +63,28 @@ const Icon = {
       <path d="M4.22 19.78a11 11 0 010-15.56M19.78 4.22a11 11 0 010 15.56" />
     </svg>
   ),
+  System: (p) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" {...p}>
+      <rect x="3" y="4" width="6" height="5" rx="1.4" />
+      <rect x="15" y="4" width="6" height="5" rx="1.4" />
+      <rect x="9" y="15" width="6" height="5" rx="1.4" />
+      <path d="M9 6.5h6M12 9v6M6 9v4.5h6M18 9v4.5h-6" />
+    </svg>
+  ),
+  Server: (p) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" {...p}>
+      <rect x="4" y="3" width="16" height="7" rx="1.5" />
+      <rect x="4" y="14" width="16" height="7" rx="1.5" />
+      <path d="M8 6.5h.01M8 17.5h.01M12 6.5h5M12 17.5h5" />
+    </svg>
+  ),
+  Database: (p) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" {...p}>
+      <ellipse cx="12" cy="5" rx="7" ry="3" />
+      <path d="M5 5v6c0 1.66 3.13 3 7 3s7-1.34 7-3V5" />
+      <path d="M5 11v6c0 1.66 3.13 3 7 3s7-1.34 7-3v-6" />
+    </svg>
+  ),
   Sun: (p) => (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" {...p}>
       <circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
@@ -108,6 +130,12 @@ const Icon = {
       <path d="M3 12h4l3-7 4 14 3-7h4" />
     </svg>
   ),
+  Refresh: (p) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" {...p}>
+      <path d="M21 12a9 9 0 01-15.1 6.6" /><path d="M3 12a9 9 0 0115.1-6.6" />
+      <path d="M18 2v4h-4M6 22v-4h4" />
+    </svg>
+  ),
 };
 
 // ----------------------- Logo -----------------------------------------
@@ -141,6 +169,7 @@ const NAV = [
   { to: '/analises',  label: 'Análises',      icon: Icon.Analyses },
   { to: '/nova',      label: 'Nova análise',  icon: Icon.Forecast },
   { to: '/sensores',  label: 'Sensores',      icon: Icon.Sensors },
+  { to: '/sistema',   label: 'Sistema',       icon: Icon.System },
 ];
 
 function Sidebar({ route, nav, open, setOpen }) {
@@ -204,6 +233,12 @@ function Sidebar({ route, nav, open, setOpen }) {
 
 // ----------------------- Topbar ---------------------------------------
 function Topbar({ title, subtitle, onMenu, theme, setTheme, alerts }) {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
   return (
     <header className="h-16 flex items-center justify-between gap-3 px-4 lg:px-8 border-b border-ink-100 dark:border-ink-800 bg-white/85 dark:bg-ink-900/85 backdrop-blur sticky top-0 z-20">
       <div className="flex items-center gap-3 min-w-0">
@@ -218,7 +253,7 @@ function Topbar({ title, subtitle, onMenu, theme, setTheme, alerts }) {
       <div className="flex items-center gap-2">
         <div className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-md bg-ink-50 dark:bg-ink-800/60 text-xs text-ink-500 dark:text-ink-400">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-          <span className="font-mono">{new Date().toLocaleString('pt-PT', { hour12: false })}</span>
+          <span className="font-mono">{now.toLocaleString('pt-PT', { hour12: false })}</span>
         </div>
         <div className="relative">
           <button className="p-2 rounded-md hover:bg-ink-100 dark:hover:bg-ink-800 relative">
@@ -423,6 +458,138 @@ function Select({ value, onChange, options, placeholder = 'Todos', className = '
 }
 function Input(props) { return <input className={inputClass} {...props} />; }
 
+// ----------------------- Data / tabela helpers --------------------------
+function dateToLocalInputValue(date) {
+  const pad = (v) => String(v).padStart(2, '0');
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+  ].join('-') + `T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+function datePresetRange(preset) {
+  const now = new Date();
+  let from = new Date(now);
+  if (preset === 'hour') from = new Date(now.getTime() - 60 * 60 * 1000);
+  else if (preset === 'day') from = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  else if (preset === 'week') from = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  else if (preset === 'month') from = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+  return { from: dateToLocalInputValue(from), to: dateToLocalInputValue(now) };
+}
+function DatePresetButtons({ onApply }) {
+  const presets = [
+    { key: 'hour', label: 'Ultima hora' },
+    { key: 'day', label: 'Ultimas 24h' },
+    { key: 'week', label: 'Ultimos 7 dias' },
+    { key: 'month', label: 'Este mes' },
+  ];
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {presets.map((preset) => (
+        <button
+          key={preset.key}
+          type="button"
+          onClick={() => onApply(datePresetRange(preset.key))}
+          className="rounded-md border border-ink-200 dark:border-ink-700 px-2.5 py-1.5 text-xs font-medium text-ink-600 dark:text-ink-300 hover:bg-ink-50 dark:hover:bg-ink-800"
+        >
+          {preset.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+function sortRows(rows, sort, accessors = {}) {
+  if (!sort?.key) return rows;
+  const direction = sort.direction === 'desc' ? -1 : 1;
+  const getValue = accessors[sort.key] || ((row) => row[sort.key]);
+  return rows.slice().sort((a, b) => {
+    const av = getValue(a);
+    const bv = getValue(b);
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    const an = typeof av === 'number' ? av : Number(av);
+    const bn = typeof bv === 'number' ? bv : Number(bv);
+    if (!Number.isNaN(an) && !Number.isNaN(bn) && String(av).trim() !== '' && String(bv).trim() !== '') {
+      return (an - bn) * direction;
+    }
+    const ad = av instanceof Date ? av.getTime() : Date.parse(av);
+    const bd = bv instanceof Date ? bv.getTime() : Date.parse(bv);
+    if (!Number.isNaN(ad) && !Number.isNaN(bd)) return (ad - bd) * direction;
+    return String(av).localeCompare(String(bv), 'pt-PT', { numeric: true, sensitivity: 'base' }) * direction;
+  });
+}
+function SortHeader({ label, sortKey, sort, onSort, align = 'left', className = '' }) {
+  const active = sort?.key === sortKey;
+  const nextDirection = active && sort.direction === 'asc' ? 'desc' : 'asc';
+  const IconComp = active && sort.direction === 'desc' ? Icon.ArrowDown : Icon.ArrowUp;
+  return (
+    <th className={`px-4 py-2.5 ${className}`}>
+      <button
+        type="button"
+        onClick={() => onSort({ key: sortKey, direction: nextDirection })}
+        className={`inline-flex w-full items-center gap-1.5 ${align === 'right' ? 'justify-end text-right' : 'justify-start text-left'} hover:text-petrol-700 dark:hover:text-petrol-300`}
+      >
+        <span>{label}</span>
+        <IconComp width={11} height={11} className={active ? 'opacity-100' : 'opacity-25'} />
+      </button>
+    </th>
+  );
+}
+function InlineError({ error, retry }) {
+  const message = error?.message || String(error || 'Tente novamente.');
+  return (
+    <div className="alert-error rounded-md bg-rose-50 dark:bg-rose-500/10 text-rose-700 dark:text-rose-200 ring-1 ring-rose-200 dark:ring-rose-500/30 px-3 py-2 text-sm">
+      Erro ao carregar dados: {message}. Tente novamente.
+      {retry && <button type="button" onClick={retry} className="ml-2 font-semibold underline underline-offset-2">Repetir</button>}
+    </div>
+  );
+}
+function RefreshMeta({ lastUpdated, refreshing }) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((v) => v + 1), 30000);
+    return () => clearInterval(id);
+  }, []);
+  if (refreshing) return <span className="text-[11px] text-ink-500 dark:text-ink-400">a atualizar...</span>;
+  if (!lastUpdated) return <span className="text-[11px] text-ink-500 dark:text-ink-400">ainda sem atualizacao</span>;
+  return <span className="text-[11px] text-ink-500 dark:text-ink-400">ultima atualizacao {timeAgo(lastUpdated.toISOString())}</span>;
+}
+
+function ToastStack({ toasts, onDismiss }) {
+  if (!toasts || toasts.length === 0) return null;
+  return (
+    <div className="fixed right-4 bottom-4 z-50 w-[min(360px,calc(100vw-2rem))] space-y-2">
+      {toasts.map((toast) => {
+        const r = toast.latest;
+        return (
+          <div key={toast.id} className="rounded-lg bg-white dark:bg-ink-900 border border-rose-200 dark:border-rose-500/40 shadow-lg px-3.5 py-3">
+            <div className="flex items-start gap-3">
+              <div className="mt-1 w-2 h-2 rounded-full bg-rose-500" />
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-semibold text-ink-900 dark:text-ink-100">
+                  Novo alerta CRITICAL{toast.count > 1 ? ` (${toast.count})` : ''}
+                </div>
+                <div className="mt-0.5 text-xs text-ink-600 dark:text-ink-300 truncate">
+                  {r.sensorId} · {window.api.ZONA_LABEL[r.zone] || r.zone} · {r.type} · {fmtNumber(r.value, r.type)} {r.unit}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => onDismiss(toast.id)}
+                className="p-1 rounded-md text-ink-400 hover:text-ink-700 dark:hover:text-ink-100 hover:bg-ink-100 dark:hover:bg-ink-800"
+                aria-label="Fechar notificacao"
+              >
+                <Icon.X width={14} height={14} />
+              </button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ----------------------- Empty / Loading -------------------------------
 function Loading({ label = 'A carregar…' }) {
   return (
@@ -443,6 +610,22 @@ function Empty({ title, hint }) {
       </div>
       <div className="mt-3 text-sm font-medium text-ink-700 dark:text-ink-200">{title || 'Sem dados'}</div>
       {hint && <div className="text-xs text-ink-500 dark:text-ink-400 mt-1">{hint}</div>}
+    </div>
+  );
+}
+function ErrorState({ title = 'Erro ao carregar dados', error, retry }) {
+  const message = error?.message || String(error || 'Tente novamente mais tarde.');
+  return (
+    <div className="px-4 lg:px-8 py-6">
+      <div className="rounded-lg bg-rose-50 dark:bg-rose-500/10 ring-1 ring-rose-200 dark:ring-rose-500/30 px-4 py-3 text-rose-700 dark:text-rose-200">
+        <div className="text-sm font-semibold">{title}</div>
+        <div className="mt-1 text-xs text-rose-600 dark:text-rose-300 break-words">{message}</div>
+        {retry && (
+          <button onClick={retry} className="mt-3 text-xs font-semibold rounded-md px-2.5 py-1.5 bg-white/80 dark:bg-ink-900/70 ring-1 ring-rose-200 dark:ring-rose-500/30 hover:bg-white dark:hover:bg-ink-900">
+            Tentar novamente
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -481,7 +664,8 @@ Object.assign(window, {
   useTheme, useHashRoute,
   Icon, Logo, Sidebar, Topbar, Card, SectionTitle,
   AlertBadge, TrendBadge, ZoneTag, TypePill, Button,
-  Field, Select, Input, inputClass, Loading, Empty,
+  Field, Select, Input, inputClass, Loading, Empty, ErrorState,
+  DatePresetButtons, sortRows, SortHeader, InlineError, RefreshMeta, ToastStack,
   ALERT_STYLES, NAV,
   fmtNumber, fmtDateTime, fmtTime, timeAgo,
 });

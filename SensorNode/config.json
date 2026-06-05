@@ -1,7 +1,7 @@
 {
-  "sensorId": "SNJ01",
+  "sensorId": "ZC01",
   "zone": "ZONA_CENTRO",
-  "type": "TEMP",
+  "type": "TEMP,HUM,RUIDO,LUZ,PM2.5,PM10,AR",
   "intervalSeconds": 5,
   "rabbitHost": "localhost",
   "rabbitPort": 5672,

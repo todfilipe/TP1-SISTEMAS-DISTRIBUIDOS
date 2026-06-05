@@ -89,39 +89,74 @@ function ReadingsChart({ data, type }) {
   );
 }
 
-function ReadingsPage({ nav }) {
+function ReadingsPage({ nav, route }) {
   const [allReadings, setAllReadings] = useState(null);
-  const [filters, setFilters] = useState({ sensorId: null, zone: null, type: null, from: '', to: '' });
+  const [error, setError] = useState(null);
+  const routeAlert = (() => {
+    const query = String(route || '').split('?')[1] || '';
+    return new URLSearchParams(query).get('alert') || null;
+  })();
+  const [filters, setFilters] = useState({ sensorId: null, zone: null, type: null, alert: routeAlert, from: '', to: '' });
   const [page, setPage] = useState(1);
+  const [sort, setSort] = useState({ key: 'timestamp', direction: 'desc' });
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
   const pageSize = 25;
+  const loadReadings = ({ silent = false } = {}) => {
+    if (!silent) setRefreshing(true);
+    setError(null);
+    window.api.invalidateCache();
+    window.api.getReadings()
+      .then((data) => {
+        setAllReadings(data);
+        setLastUpdated(new Date());
+      })
+      .catch(setError)
+      .finally(() => {
+        if (!silent) setRefreshing(false);
+      });
+  };
 
   useEffect(() => {
-    const load = () => {
-      window.api.invalidateCache();
-      window.api.getReadings().then(setAllReadings);
-    };
-    load();
-    const id = setInterval(load, 30000);
+    loadReadings();
+    const id = setInterval(() => loadReadings({ silent: true }), 30000);
     return () => clearInterval(id);
   }, []);
 
+  useEffect(() => {
+    setFilters((f) => ({ ...f, alert: routeAlert }));
+  }, [routeAlert]);
+
   const filtered = useMemo(() => {
     if (!allReadings) return [];
-    return allReadings.filter((r) => {
+    const rows = allReadings.filter((r) => {
       if (filters.sensorId && r.sensorId !== filters.sensorId) return false;
       if (filters.zone && r.zone !== filters.zone) return false;
       if (filters.type && r.type !== filters.type) return false;
+      if (filters.alert) {
+        const level = window.api.classifyAlert(r.type, r.value);
+        if (filters.alert === 'active' && level === 'NORMAL') return false;
+        if (filters.alert !== 'active' && level !== filters.alert) return false;
+      }
       if (filters.from && new Date(r.timestamp) < new Date(filters.from)) return false;
       if (filters.to && new Date(r.timestamp) > new Date(filters.to)) return false;
       return true;
     });
-  }, [allReadings, filters]);
+    return sortRows(rows, sort, {
+      zoneLabel: (r) => window.api.ZONA_LABEL[r.zone] || r.zone,
+      alert: (r) => ({ NORMAL: 0, WARNING: 1, CRITICAL: 2 }[window.api.classifyAlert(r.type, r.value)] ?? 0),
+    });
+  }, [allReadings, filters, sort]);
 
-  useEffect(() => { setPage(1); }, [filters]);
+  useEffect(() => { setPage(1); }, [filters, sort]);
 
   const sensorIds = allReadings ? Array.from(new Set(allReadings.map((r) => r.sensorId))).sort() : [];
 
-  const clearFilters = () => setFilters({ sensorId: null, zone: null, type: null, from: '', to: '' });
+  const clearFilters = () => {
+    setFilters({ sensorId: null, zone: null, type: null, alert: null, from: '', to: '' });
+    if (routeAlert) nav('/leituras');
+  };
+  const applyDatePreset = (range) => setFilters((f) => ({ ...f, ...range }));
 
   const exportCSV = () => {
     const header = ['sensorId','zone','type','value','unit','timestamp','gatewayId','originalMessageFormat'];
@@ -136,12 +171,13 @@ function ReadingsPage({ nav }) {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
+  if (error && !allReadings) return <ErrorState error={error} retry={loadReadings} />;
   if (!allReadings) return <Loading />;
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const pageData = filtered.slice((page - 1) * pageSize, page * pageSize);
 
-  const hasActiveFilters = filters.sensorId || filters.zone || filters.type || filters.from || filters.to;
+  const hasActiveFilters = filters.sensorId || filters.zone || filters.type || filters.alert || filters.from || filters.to;
 
   // Para o gráfico: se nenhum tipo selecionado, usar o tipo mais frequente nos filtrados
   const chartType = filters.type || (() => {
@@ -155,7 +191,7 @@ function ReadingsPage({ nav }) {
     <div className="px-4 lg:px-8 py-6 space-y-5">
       {/* Filters */}
       <Card padding="p-4">
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 items-end">
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 items-end">
           <Field label="Sensor">
             <Select value={filters.sensorId} onChange={(v) => setFilters((f) => ({ ...f, sensorId: v }))} options={sensorIds} placeholder="Todos" />
           </Field>
@@ -164,6 +200,18 @@ function ReadingsPage({ nav }) {
           </Field>
           <Field label="Tipo">
             <Select value={filters.type} onChange={(v) => setFilters((f) => ({ ...f, type: v }))} options={window.api.TIPOS} placeholder="Todos" />
+          </Field>
+          <Field label="Alerta">
+            <Select
+              value={filters.alert}
+              onChange={(v) => setFilters((f) => ({ ...f, alert: v }))}
+              options={[
+                { value: 'active', label: 'WARNING + CRITICAL' },
+                { value: 'WARNING', label: 'WARNING' },
+                { value: 'CRITICAL', label: 'CRITICAL' },
+              ]}
+              placeholder="Todos"
+            />
           </Field>
           <Field label="De">
             <Input type="datetime-local" value={filters.from} onChange={(e) => setFilters((f) => ({ ...f, from: e.target.value }))} />
@@ -176,11 +224,21 @@ function ReadingsPage({ nav }) {
             <Button onClick={exportCSV} icon={Icon.Download} disabled={filtered.length === 0}>CSV</Button>
           </div>
         </div>
+        <div className="mt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <DatePresetButtons onApply={applyDatePreset} />
+          <div className="flex items-center gap-2">
+            <RefreshMeta lastUpdated={lastUpdated} refreshing={refreshing} />
+            <Button variant="outline" icon={Icon.Refresh} onClick={() => loadReadings()} disabled={refreshing}>Atualizar</Button>
+          </div>
+        </div>
+        {error && <div className="mt-3"><InlineError error={error} retry={() => loadReadings()} /></div>}
         <div className="mt-3 flex items-center gap-2 text-xs text-ink-500 dark:text-ink-400">
           <span className="font-mono">{filtered.length}</span>
           <span>leituras correspondem aos filtros</span>
           {hasActiveFilters && <span className="text-petrol-600 dark:text-petrol-300">·</span>}
           {filters.type && <TypePill type={filters.type} />}
+          {filters.alert === 'active' && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 dark:bg-amber-500/10 dark:text-amber-300 font-semibold">WARNING + CRITICAL</span>}
+          {filters.alert && filters.alert !== 'active' && <AlertBadge level={filters.alert} size="sm" />}
           {filters.zone && <ZoneTag zone={filters.zone} size="sm" />}
           {filters.sensorId && <span className="font-mono px-1.5 py-0.5 rounded bg-ink-100 dark:bg-ink-800">{filters.sensorId}</span>}
         </div>
@@ -209,15 +267,15 @@ function ReadingsPage({ nav }) {
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-[11px] font-semibold uppercase tracking-wide text-ink-500 dark:text-ink-400 bg-ink-50 dark:bg-ink-950/40">
-                  <th className="px-4 py-2.5">Sensor</th>
-                  <th className="px-4 py-2.5">Zona</th>
-                  <th className="px-4 py-2.5">Tipo</th>
-                  <th className="px-4 py-2.5 text-right">Valor</th>
-                  <th className="px-4 py-2.5">Unidade</th>
-                  <th className="px-4 py-2.5">Timestamp</th>
-                  <th className="px-4 py-2.5">Gateway</th>
-                  <th className="px-4 py-2.5">Formato</th>
-                  <th className="px-4 py-2.5">Alerta</th>
+                  <SortHeader label="Sensor" sortKey="sensorId" sort={sort} onSort={setSort} />
+                  <SortHeader label="Zona" sortKey="zoneLabel" sort={sort} onSort={setSort} />
+                  <SortHeader label="Tipo" sortKey="type" sort={sort} onSort={setSort} />
+                  <SortHeader label="Valor" sortKey="value" sort={sort} onSort={setSort} align="right" />
+                  <SortHeader label="Unidade" sortKey="unit" sort={sort} onSort={setSort} />
+                  <SortHeader label="Timestamp" sortKey="timestamp" sort={sort} onSort={setSort} />
+                  <SortHeader label="Gateway" sortKey="gatewayId" sort={sort} onSort={setSort} />
+                  <SortHeader label="Formato" sortKey="originalMessageFormat" sort={sort} onSort={setSort} />
+                  <SortHeader label="Alerta" sortKey="alert" sort={sort} onSort={setSort} />
                 </tr>
               </thead>
               <tbody className="divide-y divide-ink-100 dark:divide-ink-800">

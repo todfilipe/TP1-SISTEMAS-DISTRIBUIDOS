@@ -76,6 +76,11 @@ internal sealed class AnalysisOrchestrator
 
     internal AnalysisResult? ExecutarAnalise(string tipo, string zona, string sensorId, string dateFrom, string dateTo)
     {
+        return ExecutarAnaliseComPersistencia(tipo, zona, sensorId, dateFrom, dateTo)?.Result;
+    }
+
+    internal AnalysisExecutionResult? ExecutarAnaliseComPersistencia(string tipo, string zona, string sensorId, string dateFrom, string dateTo)
+    {
         if (_analysisClient == null)
         {
             Console.WriteLine("[ERRO] Cliente gRPC de Analise nao esta inicializado.");
@@ -96,7 +101,7 @@ internal sealed class AnalysisOrchestrator
         {
             var falhaMongo = CriarFalhaAnalise(erroMongo);
             GuardarResultadoAnalise(falhaMongo, request);
-            return falhaMongo;
+            return new AnalysisExecutionResult(falhaMongo, null, erroMongo);
         }
 
         foreach (var reading in readings)
@@ -111,15 +116,15 @@ internal sealed class AnalysisOrchestrator
         {
             AnalysisResult response = _grpcPipeline.Execute(() => _analysisClient.Analyze(request));
             GuardarResultadoAnalise(response, request);
-            _mongoPersister.PersistirAnaliseMongoAsync(response, request).GetAwaiter().GetResult();
-            return response;
+            AnalysisDocument? document = _mongoPersister.PersistirAnaliseMongoAsync(response, request).GetAwaiter().GetResult();
+            return new AnalysisExecutionResult(response, document, null);
         }
         catch (Exception ex)
         {
             Console.WriteLine($"[ERRO gRPC] Falha ao executar analise via gRPC apos retentativas: {ex.Message}");
             var falha = CriarFalhaAnalise($"FALHA: servico de Analise indisponivel apos 3 tentativas ({ex.Message}).");
             GuardarResultadoAnalise(falha, request);
-            return falha;
+            return new AnalysisExecutionResult(falha, null, falha.ResultSummary);
         }
     }
 
@@ -347,3 +352,8 @@ internal sealed class AnalysisOrchestrator
             ?? "http://localhost:50052";
     }
 }
+
+internal sealed record AnalysisExecutionResult(
+    AnalysisResult Result,
+    AnalysisDocument? Document,
+    string? ErrorMessage);

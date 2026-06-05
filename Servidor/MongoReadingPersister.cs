@@ -101,12 +101,12 @@ internal sealed class MongoReadingPersister
         }
     }
 
-    internal async Task<bool> PersistirAnaliseMongoAsync(AnalysisResult result, AnalysisRequest request)
+    internal async Task<AnalysisDocument?> PersistirAnaliseMongoAsync(AnalysisResult result, AnalysisRequest request)
     {
         if (_analysesRepository == null)
         {
             Console.WriteLine("[AVISO][MongoDB] Repositorio de analises indisponivel. Resultado mantido apenas em memoria/ficheiro local.");
-            return false;
+            return null;
         }
 
         try
@@ -142,17 +142,17 @@ internal sealed class MongoReadingPersister
             using var cts = new CancellationTokenSource(_writeTimeout);
             await _analysesRepository.InsertAsync(analysis, cts.Token);
             Console.WriteLine($"[Servidor][MongoDB] Analise persistida em analyses: tipo={request.Type}, zona={request.Zone}, janela={windowStart:yyyy-MM-ddTHH:mm:ssZ}->{windowEnd:yyyy-MM-ddTHH:mm:ssZ}.");
-            return true;
+            return analysis;
         }
         catch (OperationCanceledException ex)
         {
             Console.WriteLine($"[ERRO][MongoDB] Timeout ao persistir analise apos {_writeTimeout.TotalSeconds:0}s: {ex.Message}. Resultado mantido apenas em memoria/ficheiro local.");
-            return false;
+            return null;
         }
         catch (Exception ex)
         {
             Console.WriteLine($"[ERRO][MongoDB] Falha ao persistir analise no MongoDB: {ex.GetType().Name}: {ex.Message}. Resultado mantido apenas em memoria/ficheiro local.");
-            return false;
+            return null;
         }
     }
 }

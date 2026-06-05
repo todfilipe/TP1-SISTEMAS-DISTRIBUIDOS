@@ -57,31 +57,6 @@
     const m = Math.pow(10, p);
     return Math.round(v * m) / m;
   }
-  function quantile(sortedArr, q) {
-    const pos = (sortedArr.length - 1) * q;
-    const base = Math.floor(pos);
-    const rest = pos - base;
-    if (sortedArr[base + 1] !== undefined) {
-      return sortedArr[base] + rest * (sortedArr[base + 1] - sortedArr[base]);
-    }
-    return sortedArr[base];
-  }
-  function statsOf(values) {
-    const sorted = values.slice().sort((a, b) => a - b);
-    const n = sorted.length;
-    const avg = sorted.reduce((s, v) => s + v, 0) / n;
-    const variance = sorted.reduce((s, v) => s + (v - avg) * (v - avg), 0) / Math.max(1, n - 1);
-    const sd = Math.sqrt(variance);
-    return {
-      average: avg, median: quantile(sorted, 0.5),
-      standardDeviation: sd,
-      percentile25: quantile(sorted, 0.25),
-      percentile75: quantile(sorted, 0.75),
-      percentile95: quantile(sorted, 0.95),
-      min: sorted[0], max: sorted[n - 1],
-      sampleCount: n,
-    };
-  }
   function trendOf(points) {
     const n = points.length;
     if (n < 2) return { slope: 0, classification: 'Stable' };
@@ -122,67 +97,19 @@
     }
     return res.json();
   }
-
-  function computeAnalysis({ type, zone, sensorId }, readings) {
-    const chronological = readings.slice().sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-    const values = chronological.map((r) => r.value);
-    const s = statsOf(values);
-    const tr = trendOf(values);
-    const outlierCount = values.filter((v) => v > s.average + 2 * s.standardDeviation || v < s.average - 2 * s.standardDeviation).length;
-    const movingWindow = values.slice(-5);
-    const movingAverageLast = movingWindow.reduce((a, b) => a + b, 0) / movingWindow.length;
-    const worst = chronological.reduce((acc, r) => worstAlert(acc, classifyAlert(r.type, r.value)), 'NORMAL');
-    return {
-      zone, type, sensorId: sensorId || undefined,
-      windowStart: chronological[0].timestamp,
-      windowEnd: chronological[chronological.length - 1].timestamp,
-      average: round(s.average, 3), median: round(s.median, 3),
-      standardDeviation: round(s.standardDeviation, 3),
-      percentile25: round(s.percentile25, 3),
-      percentile75: round(s.percentile75, 3),
-      percentile95: round(s.percentile95, 3),
-      min: round(s.min, 3), max: round(s.max, 3),
-      outlierCount, trendSlope: round(tr.slope, 4),
-      trendClassification: tr.classification, sampleCount: s.sampleCount,
-      movingAverageLast: round(movingAverageLast, 3),
-      alertLevel: worst,
-    };
-  }
-
-  // -------- Derivação de SensorMetadata a partir das leituras ----------
-  // (a BD não persiste o estado operacional; é derivado por recência)
-  function deriveSensors(readings) {
-    if (readings.length === 0) return [];
-    const maxTs = readings.reduce((m, r) => Math.max(m, new Date(r.timestamp).getTime()), 0);
-    const ACTIVE_WINDOW = 60 * 60 * 1000;       // 1 h  -> ativo
-    const LATENT_WINDOW = 24 * 60 * 60 * 1000;  // 24 h -> manutenção; acima -> desativado
-    const byKey = new Map();
-    readings.forEach((r) => {
-      const key = `${r.sensorId}|${r.type}`;
-      const ts = new Date(r.timestamp).getTime();
-      if (!byKey.has(key)) {
-        byKey.set(key, { sensorId: r.sensorId, zone: r.zone, type: r.type, first: ts, last: ts, count: 0 });
-      }
-      const e = byKey.get(key);
-      e.first = Math.min(e.first, ts);
-      e.last = Math.max(e.last, ts);
-      e.count += 1;
+  async function postJson(path, body) {
+    const res = await fetch(path, {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}),
     });
-    return Array.from(byKey.values()).map((e) => {
-      const age = maxTs - e.last;
-      let estado = 'ativo';
-      if (age > LATENT_WINDOW) estado = 'desativado';
-      else if (age > ACTIVE_WINDOW) estado = 'manutencao';
-      return {
-        sensorId: e.sensorId,
-        zone: e.zone,
-        type: e.type,
-        firstReadingAt: new Date(e.first).toISOString(),
-        lastReadingAt: new Date(e.last).toISOString(),
-        totalReadings: e.count,
-        estado,
-      };
-    });
+    if (!res.ok) {
+      const msg = await res.text().catch(() => res.statusText);
+      const err = new Error(`API ${res.status}: ${msg || res.statusText}`);
+      err.status = res.status;
+      throw err;
+    }
+    return res.json();
   }
 
   // -------- Cache leve das leituras + persistência de sessão -----------
@@ -221,8 +148,15 @@
     },
 
     async getSensors() {
-      const all = await allReadings();
-      return deriveSensors(all);
+      return http('/api/sensors');
+    },
+
+    async getStatus() {
+      return http('/api/status');
+    },
+
+    async getSystem() {
+      return http('/api/system');
     },
 
     async getAnalyses() {
@@ -241,48 +175,20 @@
       }
     },
 
-    // Sem persistência de previsões na BD: calculamos algumas
-    // previsões representativas sobre as leituras reais.
     async getPredictions() {
-      const all = await allReadings();
-      const targets = [
-        { type: 'AR', zone: 'ZONA_INDUSTRIAL', strategy: 'linear', periods: 6 },
-        { type: 'RUIDO', zone: 'ZONA_CENTRO', strategy: 'ewma', periods: 6 },
-        { type: 'TEMP', zone: 'ZONA_PARQUE', strategy: 'linear', periods: 8 },
-      ];
-      const out = [];
-      targets.forEach((t, idx) => {
-        const subset = filterReadings(all, { type: t.type, zone: t.zone })
-          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
-          .map((r) => r.value);
-        if (subset.length < 3) return;
-        const fc = t.strategy === 'ewma' ? forecastEWMA(subset, t.periods) : forecastLinear(subset, t.periods);
-        out.push({
-          id: `P${201 + idx}`,
-          type: t.type, zone: t.zone, strategyUsed: t.strategy, forecast: fc,
-          predictionSummary: t.strategy === 'linear'
-            ? `Regressão linear sobre ${subset.length} amostras — declive ${trendOf(subset).slope.toFixed(3)}.`
-            : `Média móvel exponencial (α=0.35) sobre ${subset.length} amostras.`,
-          timestamp: new Date().toISOString(),
-        });
-      });
-      return out;
+      return _sessionPredictions.slice();
     },
 
-    // "Calcular análise" — estatísticas sobre o filtro pedido (no cliente).
     async runAnalysis({ type, zone, sensorId, from, to }) {
-      const readings = await api.getReadings({ type, zone, sensorId, from, to });
-      if (readings.length === 0) return null;
-      const a = computeAnalysis({ type, zone, sensorId }, readings);
-      const result = {
-        id: `A${Date.now().toString().slice(-4)}`,
-        ...a,
-        createdAt: new Date().toISOString(),
-        _readings: readings.slice().sort((x, y) => new Date(x.timestamp) - new Date(y.timestamp)),
-        _session: true,
-      };
-      _sessionAnalyses.unshift(result);
-      return result;
+      try {
+        const result = await postJson('/api/analyses', { type, zone, sensorId, from, to });
+        const sessionResult = { ...result, _session: true };
+        _sessionAnalyses.unshift(sessionResult);
+        return sessionResult;
+      } catch (err) {
+        if (err.status === 404) return null;
+        throw err;
+      }
     },
 
     async runPrediction({ type, zone, sensorId, from, to, strategy = 'linear', periods = 6 }) {
@@ -299,6 +205,7 @@
           : `Média móvel exponencial (α=0.35) sobre ${values.length} amostras.`,
         timestamp: new Date().toISOString(),
         _history: chronological,
+        _session: true,
       };
       _sessionPredictions.unshift(result);
       return result;

@@ -14,9 +14,9 @@ const RECONNECT_DELAY_MS = 5000;
 const VALID_PAYLOAD_FORMATS = new Set(["JSON", "XML", "CSV"]);
 
 const DEFAULT_CONFIG = {
-  sensorId: "SNJ01",
+  sensorId: "ZC01",
   zone: "ZONA_CENTRO",
-  type: "TEMP",
+  type: "TEMP,HUM,RUIDO,LUZ,PM2.5,PM10,AR",
   intervalSeconds: 5,
   environmentServiceUrl: "http://localhost:8001",
   rabbitHost: "localhost",
@@ -55,6 +55,27 @@ function firstEnv(...names) {
 function toInt(value, fallback) {
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function parseTypes(value, fallback) {
+  const rawTypes = Array.isArray(value) ? value : String(value ?? "").split(",");
+  const types = [];
+
+  for (const rawType of rawTypes) {
+    const type = String(rawType).trim().toUpperCase();
+    if (!type || types.includes(type)) {
+      continue;
+    }
+
+    if (!isValidSensorType(type)) {
+      console.warn(`[CONFIG] Tipo invalido '${type}' ignorado.`);
+      continue;
+    }
+
+    types.push(type);
+  }
+
+  return types.length > 0 ? types : fallback;
 }
 
 function normalizeConfig() {
@@ -101,7 +122,8 @@ function normalizeConfig() {
 
   config.sensorId = String(config.sensorId).trim() || DEFAULT_CONFIG.sensorId;
   config.zone = String(config.zone).trim().toUpperCase();
-  config.type = String(config.type).trim().toUpperCase();
+  config.types = parseTypes(config.type, parseTypes(DEFAULT_CONFIG.type, ["TEMP"]));
+  config.type = config.types[0];
   config.intervalSeconds = toInt(config.intervalSeconds, DEFAULT_CONFIG.intervalSeconds);
   config.environmentServiceUrl = String(config.environmentServiceUrl).trim().replace(/\/+$/, "");
   config.rabbitPort = toInt(config.rabbitPort, DEFAULT_CONFIG.rabbitPort);
@@ -110,11 +132,6 @@ function normalizeConfig() {
   if (!isValidZone(config.zone)) {
     console.warn(`[CONFIG] Zona invalida '${config.zone}'. A usar ${DEFAULT_CONFIG.zone}.`);
     config.zone = DEFAULT_CONFIG.zone;
-  }
-
-  if (!isValidSensorType(config.type)) {
-    console.warn(`[CONFIG] Tipo invalido '${config.type}'. A usar ${DEFAULT_CONFIG.type}.`);
-    config.type = DEFAULT_CONFIG.type;
   }
 
   if (!VALID_PAYLOAD_FORMATS.has(config.payloadFormat)) {
@@ -155,7 +172,7 @@ function generateFallbackValue(type) {
 
 async function generateValue(config) {
   const environmentValue = await fetchEnvironmentValue(config);
-  return environmentValue ?? generateFallbackValue(config.type);
+  return environmentValue ?? generateFallbackValue(config.currentType || config.type);
 }
 
 async function fetchEnvironmentValue(config) {
@@ -165,7 +182,7 @@ async function fetchEnvironmentValue(config) {
 
   const url = new URL("/reading", config.environmentServiceUrl);
   url.searchParams.set("zone", config.zone);
-  url.searchParams.set("type", config.type);
+  url.searchParams.set("type", config.currentType || config.type);
   url.searchParams.set("sensorId", config.sensorId);
 
   const controller = new AbortController();
@@ -244,7 +261,7 @@ class SensorNode {
   }
 
   async start() {
-    console.log(`[SENSOR NODE] ID=${this.config.sensorId}, Zona=${this.config.zone}, Tipo=${this.config.type}, Intervalo=${this.config.intervalSeconds}s, Payload=${this.config.payloadFormat}`);
+    console.log(`[SENSOR NODE] ID=${this.config.sensorId}, Zona=${this.config.zone}, Tipos=${this.config.types.join(",")}, Intervalo=${this.config.intervalSeconds}s, Payload=${this.config.payloadFormat}`);
     await this.connectWithRetry();
     this.publishTimer = setInterval(() => {
       this.publishReading().catch((error) => {
@@ -322,26 +339,36 @@ class SensorNode {
   }
 
   async publishReading() {
-    const value = await generateValue(this.config);
-    const unit = getUnit(this.config.type);
-    const timestamp = timestampNow();
-    const message = {
-      sensorId: this.config.sensorId,
-      zone: this.config.zone,
-      type: this.config.type,
-      value,
-      unit,
-      timestamp,
-      raw: buildRawPayload(this.config, this.config.type, value, unit, timestamp),
-      rawFormat: this.config.payloadFormat
-    };
+    let publishedAny = false;
 
-    const published = this.publishMessage(message);
+    for (const type of this.config.types) {
+      this.config.currentType = type;
+      const value = await generateValue(this.config);
+      const unit = getUnit(type);
+      const timestamp = timestampNow();
+      const message = {
+        sensorId: this.config.sensorId,
+        zone: this.config.zone,
+        type,
+        value,
+        unit,
+        timestamp,
+        raw: buildRawPayload(this.config, type, value, unit, timestamp),
+        rawFormat: this.config.payloadFormat
+      };
 
-    if (published) {
+      const published = this.publishMessage(message);
+
+      if (published) {
+        publishedAny = true;
+        console.log(`[DATA] ${this.routingKey(type)} -> ${value} ${unit}`);
+      }
+    }
+
+    delete this.config.currentType;
+
+    if (publishedAny) {
       this.publishCount += 1;
-      console.log(`[DATA] ${this.routingKey(this.config.type)} -> ${value} ${unit}`);
-
       if (this.publishCount % 5 === 0) {
         await this.publishControl("HEARTBEAT");
       }

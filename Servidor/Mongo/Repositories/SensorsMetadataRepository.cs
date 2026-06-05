@@ -29,7 +29,9 @@ public class SensorsMetadataRepository
     {
         var observedAtUtc = DateTime.SpecifyKind(observedAt, DateTimeKind.Utc);
 
-        var filter = Builders<SensorMetadataDocument>.Filter.Eq(metadata => metadata.SensorId, sensorId);
+        var filter = Builders<SensorMetadataDocument>.Filter.And(
+            Builders<SensorMetadataDocument>.Filter.Eq(metadata => metadata.SensorId, sensorId),
+            Builders<SensorMetadataDocument>.Filter.Eq(metadata => metadata.Type, type));
         var update = Builders<SensorMetadataDocument>.Update
             .Set(metadata => metadata.Zone, zone)
             .Set(metadata => metadata.Type, type)

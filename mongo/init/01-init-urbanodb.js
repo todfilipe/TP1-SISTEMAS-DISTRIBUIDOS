@@ -28,6 +28,6 @@ database.analyses.createIndex(
 );
 
 database.sensors_metadata.createIndex(
-  { sensorId: 1 },
-  { name: "idx_sensors_metadata_sensorId_unique", unique: true }
+  { sensorId: 1, type: 1 },
+  { name: "idx_sensors_metadata_sensorId_type_unique", unique: true }
 );

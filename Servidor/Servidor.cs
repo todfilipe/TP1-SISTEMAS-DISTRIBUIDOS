@@ -1,4 +1,5 @@
 using Analysis;
+using Microsoft.Extensions.Configuration;
 using MongoDB.Bson;
 using Servidor.Mongo;
 using Servidor.Mongo.Repositories;
@@ -13,8 +14,8 @@ using System.Threading;
 namespace Servidor
 {
     /// <summary>
-    /// Servidor TCP que aguarda ligações de Gateways na porta 9090.
-    /// Processa mensagens do protocolo: GW_CONNECT, FORWARD, SENSOR_STATUS, GW_DISCONNECT.
+    /// Servidor central que aceita gateways por TCP legado e por RabbitMQ.
+    /// Processa mensagens do protocolo: GW_CONNECT, FORWARD, FORWARD_AGGREGATED, SENSOR_STATUS, GW_DISCONNECT.
     /// Responde com OK/ERR conforme o protocolo definido.
     /// Suporta múltiplas ligações concorrentes (uma thread por Gateway).
     /// </summary>
@@ -28,6 +29,9 @@ namespace Servidor
         private readonly MongoReadingPersister _mongoPersister;
         private readonly AnalysisOrchestrator _analysisOrchestrator;
         private readonly CliHandler _cliHandler;
+        private readonly IConfiguration _configuration;
+        private readonly GatewayRabbitMqConsumer? _gatewayRabbitMqConsumer;
+        private readonly ServidorHttpApi? _httpApi;
         private TcpListener? _listener;
         private volatile bool _running;
 
@@ -38,11 +42,14 @@ namespace Servidor
         public ServidorTCP(int porta = 9090)
         {
             _porta = porta;
+            _configuration = LoadConfiguration();
             _dataStore = new DataStore();
             (_, _readingsRepository, _analysesRepository, _sensorsMetadataRepository) = InicializarMongo();
             _mongoPersister = new MongoReadingPersister(_readingsRepository, _analysesRepository, _sensorsMetadataRepository);
             _analysisOrchestrator = new AnalysisOrchestrator(_readingsRepository, _mongoPersister);
             _cliHandler = new CliHandler(this);
+            _gatewayRabbitMqConsumer = CriarGatewayRabbitMqConsumer();
+            _httpApi = CriarHttpApi();
         }
 
         internal int Porta => _porta;
@@ -59,6 +66,8 @@ namespace Servidor
         {
             _running = false;
             _listener?.Stop();
+            _gatewayRabbitMqConsumer?.Dispose();
+            _httpApi?.Dispose();
         }
 
         internal (IReadOnlyList<AnalysisResult> Analises, IReadOnlyList<PredictionResult> Previsoes) ObterHistorico()
@@ -75,6 +84,8 @@ namespace Servidor
             _listener = new TcpListener(IPAddress.Any, _porta);
             _listener.Start();
             _running = true;
+            IniciarGatewayRabbitMqConsumer();
+            IniciarHttpApi();
 
             _cliHandler.ShowBanner();
 
@@ -116,7 +127,95 @@ namespace Servidor
             }
             finally
             {
+                _gatewayRabbitMqConsumer?.Dispose();
+                _httpApi?.Dispose();
                 _listener?.Stop();
+            }
+        }
+
+        private static IConfiguration LoadConfiguration()
+        {
+            return new ConfigurationBuilder()
+                .SetBasePath(AppDomain.CurrentDomain.BaseDirectory)
+                .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
+                .Build();
+        }
+
+        private GatewayRabbitMqConsumer? CriarGatewayRabbitMqConsumer()
+        {
+            string enabledText =
+                Environment.GetEnvironmentVariable("SERVER_RABBIT_ENABLED") ??
+                _configuration["RabbitMQ:GatewayConsumerEnabled"] ??
+                "true";
+
+            if (!bool.TryParse(enabledText, out bool enabled) || !enabled)
+            {
+                Console.WriteLine("[Servidor][RabbitMQ] Consumidor Gateway->Servidor desativado por configuracao.");
+                return null;
+            }
+
+            string host = Environment.GetEnvironmentVariable("RABBIT_HOST") ?? _configuration["RabbitMQ:Host"] ?? "localhost";
+            int port = int.TryParse(_configuration["RabbitMQ:Port"], out int configPort) ? configPort : 5672;
+            port = int.TryParse(Environment.GetEnvironmentVariable("RABBIT_PORT"), out int envPort) ? envPort : port;
+            string userName = Environment.GetEnvironmentVariable("RABBIT_USER") ?? _configuration["RabbitMQ:UserName"] ?? "admin";
+            string password = Environment.GetEnvironmentVariable("RABBIT_PASS") ?? _configuration["RabbitMQ:Password"] ?? "admin";
+            string virtualHost = Environment.GetEnvironmentVariable("RABBIT_VHOST") ?? _configuration["RabbitMQ:VirtualHost"] ?? "onehealth";
+            string exchangeName =
+                Environment.GetEnvironmentVariable("RABBIT_GATEWAY_EXCHANGE") ??
+                _configuration["RabbitMQ:GatewayExchangeName"] ??
+                "gateway.exchange";
+            string queueName =
+                Environment.GetEnvironmentVariable("RABBIT_GATEWAY_QUEUE") ??
+                _configuration["RabbitMQ:GatewayQueueName"] ??
+                "server.gateway.ingest";
+
+            return new GatewayRabbitMqConsumer(host, port, userName, password, virtualHost, exchangeName, queueName, this);
+        }
+
+        private void IniciarGatewayRabbitMqConsumer()
+        {
+            if (_gatewayRabbitMqConsumer == null)
+            {
+                return;
+            }
+
+            try
+            {
+                _gatewayRabbitMqConsumer.Start();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Servidor][RabbitMQ] Nao foi possivel iniciar consumidor Gateway->Servidor: {ex.Message}");
+            }
+        }
+
+        private ServidorHttpApi? CriarHttpApi()
+        {
+            string enabledText =
+                Environment.GetEnvironmentVariable("SERVER_HTTP_ENABLED") ??
+                _configuration["HttpApi:Enabled"] ??
+                "true";
+
+            if (!bool.TryParse(enabledText, out bool enabled) || !enabled)
+            {
+                Console.WriteLine("[Servidor][HTTP] API HTTP desativada por configuracao.");
+                return null;
+            }
+
+            int port = int.TryParse(_configuration["HttpApi:Port"], out int configPort) ? configPort : 9091;
+            port = int.TryParse(Environment.GetEnvironmentVariable("SERVER_HTTP_PORT"), out int envPort) ? envPort : port;
+            return new ServidorHttpApi(this, port);
+        }
+
+        private void IniciarHttpApi()
+        {
+            try
+            {
+                _httpApi?.Start();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Servidor][HTTP] Nao foi possivel iniciar API HTTP: {ex.Message}");
             }
         }
 
@@ -152,6 +251,11 @@ namespace Servidor
         internal AnalysisResult? ExecutarAnalise(string tipo, string zona, string sensorId, string dateFrom, string dateTo)
         {
             return _analysisOrchestrator.ExecutarAnalise(tipo, zona, sensorId, dateFrom, dateTo);
+        }
+
+        internal AnalysisExecutionResult? ExecutarAnaliseComPersistencia(string tipo, string zona, string sensorId, string dateFrom, string dateTo)
+        {
+            return _analysisOrchestrator.ExecutarAnaliseComPersistencia(tipo, zona, sensorId, dateFrom, dateTo);
         }
 
         internal static string NormalizarEstrategia(string? input)
@@ -265,6 +369,69 @@ namespace Servidor
 
                 default:
                     Console.WriteLine($"[Servidor] Comando desconhecido: {comando}");
+                    return "ERR_INVALID_DATA";
+            }
+        }
+
+        internal string ProcessarMensagemRabbit(string gatewayId, string mensagem)
+        {
+            string[] partes = mensagem.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+            if (partes.Length == 0)
+                return "ERR_INVALID_DATA";
+
+            string comando = partes[0];
+
+            if (comando == "GW_CONNECT")
+            {
+                if (partes.Length != 2 || partes[1] != gatewayId)
+                {
+                    return "ERR_INVALID_DATA";
+                }
+
+                lock (_gwListLock)
+                {
+                    _gatewaysLigados.Add(gatewayId);
+                }
+
+                Console.WriteLine($"[Servidor] Gateway ativo via RabbitMQ: {gatewayId}");
+                return $"OK_GW_CONNECTED {gatewayId}";
+            }
+
+            if (comando == "GW_DISCONNECT")
+            {
+                if (partes.Length != 2 || partes[1] != gatewayId)
+                {
+                    return "ERR_INVALID_DATA";
+                }
+
+                lock (_gwListLock)
+                {
+                    _gatewaysLigados.Remove(gatewayId);
+                }
+
+                Console.WriteLine($"[Servidor] Gateway desconectado via RabbitMQ: {gatewayId}");
+                return "OK_GW_DISCONNECT";
+            }
+
+            lock (_gwListLock)
+            {
+                _gatewaysLigados.Add(gatewayId);
+            }
+
+            switch (comando)
+            {
+                case "FORWARD":
+                    return ProcessarForward(partes, gatewayId);
+
+                case "FORWARD_AGGREGATED":
+                    return ProcessarForwardAggregated(partes, gatewayId);
+
+                case "SENSOR_STATUS":
+                    return ProcessarSensorStatus(partes, gatewayId);
+
+                default:
+                    Console.WriteLine($"[Servidor] Comando RabbitMQ desconhecido: {comando}");
                     return "ERR_INVALID_DATA";
             }
         }
