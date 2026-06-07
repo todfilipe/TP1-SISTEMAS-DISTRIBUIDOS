@@ -126,13 +126,33 @@
     }
     return _allReadingsCache;
   }
+  function parseInputDate(dateStr) {
+    if (!dateStr) return null;
+    const parts = dateStr.split(/[-T:]/);
+    if (parts.length >= 5) {
+      const y = parseInt(parts[0], 10);
+      const m = parseInt(parts[1], 10) - 1;
+      const d = parseInt(parts[2], 10);
+      const h = parseInt(parts[3], 10);
+      const min = parseInt(parts[4], 10);
+      return new Date(y, m, d, h, min);
+    }
+    return new Date(dateStr);
+  }
+
   function filterReadings(list, f = {}) {
     let out = list.slice();
     if (f.sensorId) out = out.filter((r) => r.sensorId === f.sensorId);
     if (f.zone)     out = out.filter((r) => r.zone === f.zone);
     if (f.type)     out = out.filter((r) => r.type === f.type);
-    if (f.from)     out = out.filter((r) => new Date(r.timestamp) >= new Date(f.from));
-    if (f.to)       out = out.filter((r) => new Date(r.timestamp) <= new Date(f.to));
+    if (f.from) {
+      const fromDate = parseInputDate(f.from);
+      if (fromDate) out = out.filter((r) => new Date(r.timestamp) >= fromDate);
+    }
+    if (f.to) {
+      const toDate = parseInputDate(f.to);
+      if (toDate) out = out.filter((r) => new Date(r.timestamp) <= toDate);
+    }
     return out;
   }
 
@@ -140,9 +160,26 @@
   const api = {
     // dicionários e helpers
     TIPOS, UNIDADES, ZONAS, ESTADOS, ESTRATEGIAS, FORMATOS, ZONA_LABEL,
-    classifyAlert, worstAlert,
+    classifyAlert, worstAlert, parseInputDate,
 
     async getReadings(filters = {}) {
+      const hasBackendFilters = !!(filters.sensorId || filters.zone || filters.type || filters.from || filters.to);
+      if (hasBackendFilters) {
+        const params = {};
+        if (filters.sensorId) params.sensorId = filters.sensorId;
+        if (filters.zone) params.zone = filters.zone;
+        if (filters.type) params.type = filters.type;
+        if (filters.from) {
+          const fromDate = parseInputDate(filters.from);
+          if (fromDate) params.from = fromDate.toISOString();
+        }
+        if (filters.to) {
+          const toDate = parseInputDate(filters.to);
+          if (toDate) params.to = toDate.toISOString();
+        }
+        params.limit = 50000;
+        return http('/api/readings', params);
+      }
       const all = await allReadings();
       return filterReadings(all, filters);
     },

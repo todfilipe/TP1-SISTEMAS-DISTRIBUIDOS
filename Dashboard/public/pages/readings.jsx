@@ -2,15 +2,36 @@
 // pages/readings.jsx — Explorador de séries temporais
 // =====================================================================
 
-function ReadingsChart({ data, type }) {
+function ReadingsChart({ data, type, filters }) {
   const { LineChart, Line, ResponsiveContainer, XAxis, YAxis, Tooltip, CartesianGrid, Legend } = window.Recharts;
   const dark = document.documentElement.classList.contains('dark');
   const axisColor = dark ? '#7d8c97' : '#566873';
 
   // Reagrupar por sensor para multi-série
   const sensors = Array.from(new Set(data.map((d) => d.sensorId))).sort();
-  // Buckets temporais (bin de ~30 min para reduzir ruído visual)
-  const binMs = 30 * 60 * 1000;
+
+  // Calcular intervalo de tempo para definir o tamanho dinâmico do bucket (binMs)
+  const timestamps = data.map((d) => new Date(d.timestamp).getTime());
+  const parsedFrom = filters?.from ? window.api.parseInputDate(filters.from)?.getTime() : null;
+  const parsedTo = filters?.to ? window.api.parseInputDate(filters.to)?.getTime() : null;
+
+  const minTs = parsedFrom != null ? parsedFrom : (timestamps.length > 0 ? Math.min(...timestamps) : Date.now() - 3600000);
+  const maxTs = parsedTo != null ? parsedTo : (timestamps.length > 0 ? Math.max(...timestamps) : Date.now());
+  const diffMs = maxTs - minTs;
+
+  let binMs = 30 * 60 * 1000; // Padrão: 30 minutos
+  if (diffMs < 5 * 60 * 1000) {
+    binMs = 5 * 1000; // < 5 min -> buckets de 5 segundos
+  } else if (diffMs < 30 * 60 * 1000) {
+    binMs = 30 * 1000; // < 30 min -> buckets de 30 segundos
+  } else if (diffMs < 2 * 60 * 60 * 1000) {
+    binMs = 1 * 60 * 1000; // < 2 horas -> buckets de 1 minuto
+  } else if (diffMs < 12 * 60 * 60 * 1000) {
+    binMs = 5 * 60 * 1000; // < 12 horas -> buckets de 5 minutos
+  } else if (diffMs < 24 * 60 * 60 * 1000) {
+    binMs = 10 * 60 * 1000; // < 24 horas -> buckets de 10 minutos
+  }
+
   const map = new Map();
   data.forEach((d) => {
     const ts = new Date(d.timestamp).getTime();
@@ -42,13 +63,25 @@ function ReadingsChart({ data, type }) {
           <XAxis
             dataKey="ts"
             type="number"
-            domain={['dataMin', 'dataMax']}
+            domain={[minTs, maxTs]}
             tick={{ fill: axisColor, fontSize: 11 }}
             axisLine={false}
             tickLine={false}
             tickFormatter={(t) => {
-              const d = new Date(t);
-              return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}h`;
+              try {
+                const iso = new Date(t).toISOString();
+                if (diffMs < 5 * 60 * 1000) {
+                  return new Date(t).toLocaleTimeString('pt-PT', { minute: '2-digit', second: '2-digit', hour12: false });
+                } else if (diffMs < 12 * 60 * 60 * 1000) {
+                  return fmtTime(iso);
+                }
+                const dateStr = fmtDateTime(iso).split(' ')[0]; // DD/MM/AAAA
+                const timeStr = fmtTime(iso); // HH:MM
+                const dayMonth = dateStr.slice(0, 5); // DD/MM
+                return `${dayMonth} ${timeStr}`;
+              } catch (e) {
+                return '—';
+              }
             }}
           />
           <YAxis
@@ -102,11 +135,11 @@ function ReadingsPage({ nav, route }) {
   const [lastUpdated, setLastUpdated] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const pageSize = 25;
-  const loadReadings = ({ silent = false } = {}) => {
+  const loadReadings = ({ silent = false, currentFilters = filters } = {}) => {
     if (!silent) setRefreshing(true);
     setError(null);
     window.api.invalidateCache();
-    window.api.getReadings()
+    window.api.getReadings(currentFilters)
       .then((data) => {
         setAllReadings(data);
         setLastUpdated(new Date());
@@ -118,10 +151,10 @@ function ReadingsPage({ nav, route }) {
   };
 
   useEffect(() => {
-    loadReadings();
-    const id = setInterval(() => loadReadings({ silent: true }), 30000);
+    loadReadings({ silent: false, currentFilters: filters });
+    const id = setInterval(() => loadReadings({ silent: true, currentFilters: filters }), 15000);
     return () => clearInterval(id);
-  }, []);
+  }, [filters.sensorId, filters.zone, filters.type, filters.from, filters.to]);
 
   useEffect(() => {
     setFilters((f) => ({ ...f, alert: routeAlert }));
@@ -138,8 +171,14 @@ function ReadingsPage({ nav, route }) {
         if (filters.alert === 'active' && level === 'NORMAL') return false;
         if (filters.alert !== 'active' && level !== filters.alert) return false;
       }
-      if (filters.from && new Date(r.timestamp) < new Date(filters.from)) return false;
-      if (filters.to && new Date(r.timestamp) > new Date(filters.to)) return false;
+      if (filters.from) {
+        const fromDate = window.api.parseInputDate(filters.from);
+        if (fromDate && new Date(r.timestamp) < fromDate) return false;
+      }
+      if (filters.to) {
+        const toDate = window.api.parseInputDate(filters.to);
+        if (toDate && new Date(r.timestamp) > toDate) return false;
+      }
       return true;
     });
     return sortRows(rows, sort, {
@@ -257,7 +296,7 @@ function ReadingsPage({ nav, route }) {
         }>Série temporal</SectionTitle>
         {chartData.length === 0
           ? <Empty title="Sem dados para o filtro atual" hint="Ajuste os filtros para visualizar séries." />
-          : <ReadingsChart data={chartData} type={chartType} />}
+          : <ReadingsChart data={chartData} type={chartType} filters={filters} />}
       </Card>
 
       {/* Table */}
