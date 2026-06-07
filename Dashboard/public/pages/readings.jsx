@@ -185,7 +185,13 @@ function ReadingsPage({ nav, route }) {
     filtered.forEach((r) => { counts[r.type] = (counts[r.type] || 0) + 1; });
     return Object.entries(counts).sort((a,b) => b[1]-a[1])[0]?.[0] || 'TEMP';
   })();
-  const chartData = filtered.filter((r) => r.type === chartType);
+
+  const chartData = filtered.filter((r) => {
+    if (r.type !== chartType) return false;
+    // Se não houver sensor selecionado, mostrar apenas os agregados no gráfico
+    if (!filters.sensorId && !r.sensorId.startsWith("AGREGADO_")) return false;
+    return true;
+  });
 
   return (
     <div className="px-4 lg:px-8 py-6 space-y-5">

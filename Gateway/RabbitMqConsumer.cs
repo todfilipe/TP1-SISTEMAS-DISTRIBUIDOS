@@ -27,6 +27,7 @@ namespace Gateway
         private readonly Func<string, string> _sendToServer;
         private readonly ReadingAggregator _aggregator;
         private readonly PreprocessingClient _preprocessingClient;
+        private readonly RetryBuffer _retryBuffer;
 
         private IConnection _connection = null!;
         private IModel _channel = null!;
@@ -44,7 +45,8 @@ namespace Gateway
             SensorConfigManager configManager,
             Func<string, string> sendToServer,
             ReadingAggregator aggregator,
-            PreprocessingClient preprocessingClient)
+            PreprocessingClient preprocessingClient,
+            RetryBuffer retryBuffer)
         {
             _gatewayId = gatewayId;
             _host = host;
@@ -59,6 +61,7 @@ namespace Gateway
             _sendToServer = sendToServer;
             _aggregator = aggregator;
             _preprocessingClient = preprocessingClient;
+            _retryBuffer = retryBuffer;
         }
 
         public void Start()
@@ -303,6 +306,15 @@ namespace Gateway
             string finalZone = !string.IsNullOrEmpty(normalized.Zone) ? normalized.Zone : sensor.Zona;
             string normalizedForward = $"FORWARD {sensorId} {normalized.Type} {normalizedValueText} {finalZone} {normalized.Timestamp}";
 
+            // Send individual reading directly to the server
+            string sendResponse = _sendToServer(normalizedForward);
+            if (sendResponse == null)
+            {
+                Console.WriteLine($"[RABBITMQ] Servidor inalcançável — leitura individual '{sensorId}' colocada no buffer de retentativa: {normalizedForward}");
+                _retryBuffer.Enqueue(normalizedForward);
+            }
+
+            // Also enqueue for temporal 15s aggregation
             _aggregator.Enqueue(normalizedForward);
             _configManager.UpdateLastSync(sensorId, DateTime.UtcNow);
             return true;
