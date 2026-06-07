@@ -181,14 +181,33 @@ namespace Servidor
                 return;
             }
 
-            try
+            Thread startThread = new Thread(() =>
             {
-                _gatewayRabbitMqConsumer.Start();
-            }
-            catch (Exception ex)
+                int maxRetries = 10;
+                int delaySeconds = 5;
+                for (int i = 1; i <= maxRetries; i++)
+                {
+                    try
+                    {
+                        _gatewayRabbitMqConsumer.Start();
+                        return; // Connected successfully!
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[Servidor][RabbitMQ][Tentativa {i}/{maxRetries}] Nao foi possivel iniciar consumidor Gateway->Servidor: {ex.Message}");
+                        if (i < maxRetries)
+                        {
+                            Thread.Sleep(TimeSpan.FromSeconds(delaySeconds));
+                        }
+                    }
+                }
+                Console.WriteLine("[Servidor][RabbitMQ] Falha definitiva ao ligar ao RabbitMQ.");
+            })
             {
-                Console.WriteLine($"[Servidor][RabbitMQ] Nao foi possivel iniciar consumidor Gateway->Servidor: {ex.Message}");
-            }
+                IsBackground = true,
+                Name = "RabbitConsumerStarter"
+            };
+            startThread.Start();
         }
 
         private ServidorHttpApi? CriarHttpApi()

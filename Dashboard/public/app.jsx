@@ -56,7 +56,7 @@ function App() {
       }).catch(() => setAlertCount(0));
     };
     load();
-    const id = setInterval(load, 30000);
+    const id = setInterval(load, 15000);
     return () => clearInterval(id);
   }, []);
 

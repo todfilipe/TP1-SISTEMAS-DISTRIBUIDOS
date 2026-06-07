@@ -131,7 +131,8 @@ namespace Gateway
                     _configManager,
                     sendToServer,
                     _readingAggregator,
-                    preprocessingClient);
+                    preprocessingClient,
+                    _retryBuffer);
                 _rabbitConsumer.Start();
 
                 RegisterShutdownHandlers(gatewayId);
